@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Mewt Playground - Cat detection demo",
   "main": "play.html",
+  "type": "module",
   "scripts": {
     "start": "serve",
     "test": "echo \"Error: no test specified\" && exit 1"

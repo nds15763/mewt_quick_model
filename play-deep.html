@@ -119,8 +119,11 @@
       FilesetResolver as AudioFilesetResolver
     } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8";
 
-    // Import audio feature extraction functions
-    import { calculateZCR, calculateSpectralCentroid, calculateSpectralRolloff, calculateEnergy, calculateRMS } from './features.js';
+  // Import audio feature extraction functions
+  import { calculateZCR, calculateSpectralCentroid, calculateSpectralRolloff, calculateEnergy, calculateRMS } from './features.js';
+  
+  // Import new context management system
+  import Mewt from './mewt.js';
 
     // Get DOM elements
     const video = document.getElementById("webcam");
@@ -143,10 +146,14 @@
     let audioContext;
     let isRunning = false;
     
+    // New context management system
+    let mewtContext = new Mewt();
+    
     // Storage for latest predictions
     let latestPredictions = {
       image: [],
-      audio: []
+      audio: [],
+      audioBuffer: null
     };
 
     // Create ImageClassifier with proper error handling
@@ -296,23 +303,30 @@
          item.categoryName.toLowerCase().includes('meow')) && item.score > 0.2);
     };
 
-    // Generate quick response based on detections
+    // Generate quick response using the new context management system
     const generateQuickResponse = () => {
-      // Check for cat in image (top 3 results)
-      const catInImage = hasCatInTop3(latestPredictions.image);
-      
-      // Check for cat-related sounds in audio (top 3 results)
-      const catSoundInAudio = hasCatSoundInTop3(latestPredictions.audio);
-      
-      // Generate response based on detections
-      if (catInImage && catSoundInAudio) {
-        quickResponseElement.textContent = "哦！是个小猫";
-      } else if (catSoundInAudio) {
-        quickResponseElement.textContent = "诶？我好像听到小猫叫了";
-      } else if (catInImage) {
-        quickResponseElement.textContent = "那里有只小猫";
-      } else {
-        // No cat detected
+      try {
+        // 获取上下文管理系统的状态
+        const context = mewtContext.getFullContext();
+        
+        // 如果没有情绪响应覆盖，使用基础状态响应
+        const hasVisual = mewtContext.hasVisualCat();
+        const hasAudio = mewtContext.hasCatSound();
+        const currentState = mewtContext.determineState(hasVisual, hasAudio);
+        
+        // 生成基于状态的响应
+        const stateResponse = mewtContext.stateResponses[currentState];
+        
+        // 如果当前文本不是情绪响应，更新为状态响应
+        if (quickResponseElement.style.color !== 'rgb(255, 107, 107)') {
+          quickResponseElement.textContent = stateResponse;
+        }
+        
+        // 显示调试信息
+        console.log('🎯 当前状态:', currentState, '| 关注猫咪:', context.is_now_focusing_cat);
+        
+      } catch (error) {
+        console.error('生成快速响应时出错:', error);
         quickResponseElement.textContent = "观察中...";
       }
     };
@@ -354,7 +368,7 @@
       startAudioClassification();
     };
 
-    // Predict from webcam
+    // Predict from webcam - 新的上下文管理系统
     const predictWebcam = async () => {
       if (!imageClassifier || !video.videoWidth || !video.videoHeight) {
         window.requestAnimationFrame(predictWebcam);
@@ -367,7 +381,16 @@
         const classifications = classificationResult.classifications;
         
         if (classifications.length > 0 && classifications[0].categories.length > 0) {
-          // Store the latest image predictions
+          // 转换MediaPipe格式到新上下文管理系统格式
+          const imageResults = classifications[0].categories.map(category => ({
+            class: category.categoryName,
+            score: category.score
+          }));
+          
+          // 添加到上下文管理系统
+          mewtContext.addImageResult(imageResults);
+          
+          // 保留用于显示
           latestPredictions.image = classifications[0].categories;
           updateDisplay();
         }
@@ -411,7 +434,28 @@
             const result = audioClassifier.classify(inputData);
             const categories = result[0].classifications[0].categories;
 
-            // Store the latest audio predictions
+            // 转换MediaPipe格式到新上下文管理系统格式
+            const audioResults = categories.map(category => ({
+              class: category.categoryName,
+              score: category.score
+            }));
+
+            // 添加到上下文管理系统，可能触发情绪分析
+            const emotionResponse = mewtContext.addAudioResult(audioResults, inputData);
+            
+            // 如果有情绪响应，显示在界面上
+            if (emotionResponse) {
+              console.log('🎭 情绪分析触发:', emotionResponse);
+              quickResponseElement.textContent = emotionResponse.text;
+              quickResponseElement.style.color = '#ff6b6b'; // 高亮显示情绪
+              
+              // 3秒后恢复正常颜色
+              setTimeout(() => {
+                quickResponseElement.style.color = 'white';
+              }, 3000);
+            }
+
+            // Store the latest audio predictions for display
             latestPredictions.audio = categories;
             updateDisplay();
           } catch (error) {
