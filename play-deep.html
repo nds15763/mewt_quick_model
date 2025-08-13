@@ -119,8 +119,11 @@
       FilesetResolver as AudioFilesetResolver
     } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8";
 
-  // Import audio feature extraction functions
-  import { calculateZCR, calculateSpectralCentroid, calculateSpectralRolloff, calculateEnergy, calculateRMS } from './features.js';
+    // Import audio feature extraction functions
+    import { calculateZCR, calculateSpectralCentroid, calculateSpectralRolloff, calculateEnergy, calculateRMS } from './features.js';
+    
+    // Import emotion classification functions
+    import { classifyEmotion } from './emotions.js';
   
   // Import new context management system
   import Mewt from './mewt.js';

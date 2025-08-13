@@ -1,5 +1,5 @@
 // Test script for emotion classification rule engine
-import { classifyEmotion, classifyEmotionCategory } from './emotions.ts';
+import { classifyEmotion, classifyEmotionCategory } from './emotions.js';
 
 // Test audio features (simulated)
 const testFeatures = [

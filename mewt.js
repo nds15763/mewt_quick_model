@@ -11,7 +11,7 @@
  */
 
 // 导入情绪分类规则引擎
-import { classifyEmotion } from './emotions.ts';
+import { classifyEmotion } from './emotions.js';
 
 // 导入音频特征提取函数
 import { 
