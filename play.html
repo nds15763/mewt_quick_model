@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MediaPipe Audio & Image Classification with Mewt</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #000;
+      font-family: Arial, sans-serif;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #webcam {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #predictionPanel {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 15px;
+      border-radius: 5px;
+      z-index: 10;
+      min-width: 300px;
+      max-width: 500px;
+    }
+
+    #predictionPanel h3 {
+      margin: 0 0 10px 0;
+      font-size: 18px;
+    }
+
+    #rawPredictions {
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+
+    #rawPredictions pre {
+      margin: 5px 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    #mewtResponse {
+      font-size: 18px;
+      min-height: 30px;
+      font-weight: bold;
+    }
+
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 24px;
+      text-align: center;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="loading">Loading models...<br/><small>This may take a moment</small></div>
+    <video id="webcam" autoplay playsinline></video>
+    <div id="predictionPanel" class="hidden">
+      <h3>Analysis Results</h3>
+      <div id="rawPredictions">
+        <div><strong>Image:</strong> <span id="imageResults">Analyzing...</span></div>
+        <div><strong>Audio:</strong> <span id="audioResults">Analyzing...</span></div>
+      </div>
+      <div id="mewtResponse">Ready</div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Import MediaPipe libraries
+    import {
+      ImageClassifier,
+      FilesetResolver as VisionFilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8";
+    
+    import {
+      AudioClassifier,
+      FilesetResolver as AudioFilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8";
+    
+    // Import Mewt module
+    import Mewt from "./mewt.js";
+
+    // Get DOM elements
+    const video = document.getElementById("webcam");
+    const predictionPanel = document.getElementById("predictionPanel");
+    const imageResultsElement = document.getElementById("imageResults");
+    const audioResultsElement = document.getElementById("audioResults");
+    const mewtResponseElement = document.getElementById("mewtResponse");
+    const loadingElement = document.getElementById("loading");
+    
+    // Variables for classifiers
+    let imageClassifier;
+    let audioClassifier;
+    let audioContext;
+    let isRunning = false;
+    
+    // Storage for latest predictions
+    let latestPredictions = {
+      image: [],
+      audio: []
+    };
+    
+    // Initialize Mewt
+    const mewt = new Mewt();
+
+    // Create ImageClassifier with proper error handling
+    const createImageClassifier = async () => {
+      try {
+        console.log("Loading vision fileset...");
+        const vision = await VisionFilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+        );
+        
+        console.log("Creating image classifier...");
+        imageClassifier = await ImageClassifier.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/float32/1/efficientnet_lite0.tflite`
+          },
+          maxResults: 3,
+          runningMode: "VIDEO"
+        });
+        
+        console.log("Image classifier loaded successfully");
+        return true;
+      } catch (error) {
+        console.error("Error loading image classifier:", error);
+        loadingElement.innerHTML = "Error loading image classifier: " + error.message;
+        return false;
+      }
+    };
+
+    // Create AudioClassifier with proper error handling
+    const createAudioClassifier = async () => {
+      try {
+        console.log("Loading audio fileset...");
+        const audio = await AudioFilesetResolver.forAudioTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8/wasm"
+        );
+        
+        console.log("Creating audio classifier...");
+        audioClassifier = await AudioClassifier.createFromOptions(audio, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite"
+          },
+          maxResults: 3
+        });
+        
+        console.log("Audio classifier loaded successfully");
+        return true;
+      } catch (error) {
+        console.error("Error loading audio classifier:", error);
+        loadingElement.innerHTML = "Error loading audio classifier: " + error.message;
+        return false;
+      }
+    };
+
+    // Load models sequentially to avoid conflicts
+    const loadModels = async () => {
+      loadingElement.innerHTML = "Loading image classifier...<br/><small>This may take a moment</small>";
+      const imageSuccess = await createImageClassifier();
+      
+      if (!imageSuccess) return;
+      
+      loadingElement.innerHTML = "Loading audio classifier...<br/><small>This may take a moment</small>";
+      const audioSuccess = await createAudioClassifier();
+      
+      if (!audioSuccess) return;
+      
+      // Hide loading indicator
+      loadingElement.style.display = "none";
+      predictionPanel.classList.remove("hidden");
+      // Start classification
+      startClassification();
+    };
+
+    // Update the display
+    const updateDisplay = () => {
+      // Update raw predictions
+      if (latestPredictions.image.length > 0) {
+        const topImages = latestPredictions.image.slice(0, 3);
+        imageResultsElement.textContent = topImages.map(item => 
+          `${item.categoryName} (${Math.round(item.score * 100)}%)`).join(', ');
+      } else {
+        imageResultsElement.textContent = "Analyzing...";
+      }
+      
+      if (latestPredictions.audio.length > 0) {
+        const topAudios = latestPredictions.audio.slice(0, 3);
+        audioResultsElement.textContent = topAudios.map(item => 
+          `${item.categoryName} (${Math.round(item.score * 100)}%)`).join(', ');
+      } else {
+        audioResultsElement.textContent = "Analyzing...";
+      }
+      
+      // Format predictions for Mewt
+      const formattedPredictions = {
+        image: latestPredictions.image.slice(0, 3).map(item => ({
+          class: item.categoryName,
+          score: item.score
+        })),
+        audio: latestPredictions.audio.slice(0, 3).map(item => ({
+          class: item.categoryName,
+          score: item.score
+        }))
+      };
+      
+      // Generate Mewt response
+      const mewtResponse = mewt.generateQuickResponse(formattedPredictions);
+      if (mewtResponse) {
+        mewtResponseElement.textContent = mewtResponse;
+      }
+    };
+
+    // Start classification
+    const startClassification = async () => {
+      if (isRunning) return;
+      
+      isRunning = true;
+      
+      // Start image classification
+      try {
+        // Try to get the rear camera by specifying constraints
+        const constraints = {
+          video: {
+            facingMode: { ideal: "environment" } // Prefer rear camera
+          }
+        };
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        video.addEventListener("loadeddata", predictWebcam);
+      } catch (err) {
+        console.error("Error accessing webcam:", err);
+        loadingElement.innerHTML = "Error accessing webcam: " + err.message;
+        
+        // Fallback to default camera if rear camera is not available
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          video.srcObject = stream;
+          video.addEventListener("loadeddata", predictWebcam);
+        } catch (fallbackErr) {
+          console.error("Error accessing any webcam:", fallbackErr);
+          loadingElement.innerHTML = "Error accessing any webcam: " + fallbackErr.message;
+        }
+      }
+      
+      // Start audio classification
+      startAudioClassification();
+    };
+
+    // Predict from webcam
+    const predictWebcam = async () => {
+      if (!imageClassifier || !video.videoWidth || !video.videoHeight) {
+        window.requestAnimationFrame(predictWebcam);
+        return;
+      }
+      
+      try {
+        const startTimeMs = performance.now();
+        const classificationResult = imageClassifier.classifyForVideo(video, startTimeMs);
+        const classifications = classificationResult.classifications;
+        
+        if (classifications.length > 0 && classifications[0].categories.length > 0) {
+          // Store the latest image predictions
+          latestPredictions.image = classifications[0].categories;
+          updateDisplay();
+        }
+      } catch (error) {
+        console.error("Image classification error:", error);
+      }
+      
+      // Continue predicting
+      window.requestAnimationFrame(predictWebcam);
+    };
+
+    // Start audio classification
+    const startAudioClassification = async () => {
+      const constraints = { audio: true };
+      let stream;
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        loadingElement.innerHTML = "Error accessing microphone: " + err.message;
+        return;
+      }
+
+      try {
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(stream);
+        const scriptNode = audioContext.createScriptProcessor(16384, 1, 1);
+
+        scriptNode.onaudioprocess = function (audioProcessingEvent) {
+          try {
+            if (!audioClassifier) return;
+            
+            const inputBuffer = audioProcessingEvent.inputBuffer;
+            const inputData = inputBuffer.getChannelData(0);
+
+            // Classify the audio
+            const result = audioClassifier.classify(inputData);
+            const categories = result[0].classifications[0].categories;
+
+            // Store the latest audio predictions
+            latestPredictions.audio = categories;
+            updateDisplay();
+          } catch (error) {
+            console.error("Audio classification error:", error);
+          }
+        };
+
+        source.connect(scriptNode);
+        scriptNode.connect(audioContext.destination);
+      } catch (error) {
+        console.error("Error setting up audio classification:", error);
+        loadingElement.innerHTML = "Error setting up audio classification: " + error.message;
+      }
+    };
+
+    // Initialize when page loads
+    window.addEventListener("DOMContentLoaded", loadModels);
+  </script>
+</body>
+</html>
