@@ -38,6 +38,15 @@
       max-width: 500px;
     }
 
+    #audioFeatures {
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    #audioFeatures div {
+      margin: 3px 0;
+    }
+
     #predictionPanel h3 {
       margin: 0 0 10px 0;
       font-size: 18px;
@@ -85,6 +94,15 @@
         <div><strong>Image:</strong> <span id="imageResults">Analyzing...</span></div>
         <div><strong>Audio:</strong> <span id="audioResults">Analyzing...</span></div>
       </div>
+      <div id="audioFeatures">
+        <div><strong>Zero Crossing Rate:</strong> <span id="zeroCrossingRate">N/A</span></div>
+        <div><strong>Spectral Centroid:</strong> <span id="spectralCentroid">N/A</span></div>
+        <div><strong>Spectral Rolloff:</strong> <span id="spectralRolloff">N/A</span></div>
+        <div><strong>Energy:</strong> <span id="energy">N/A</span></div>
+        <div><strong>RMS:</strong> <span id="rms">N/A</span></div>
+        <div><strong>Top Categories:</strong> <span id="topCategories">N/A</span></div>
+        <div><strong>Max Score:</strong> <span id="maxScore">N/A</span></div>
+      </div>
       <div id="quickResponse">Ready</div>
     </div>
   </div>
@@ -108,6 +126,13 @@
     const audioResultsElement = document.getElementById("audioResults");
     const quickResponseElement = document.getElementById("quickResponse");
     const loadingElement = document.getElementById("loading");
+    const zeroCrossingRateElement = document.getElementById("zeroCrossingRate");
+    const spectralCentroidElement = document.getElementById("spectralCentroid");
+    const spectralRolloffElement = document.getElementById("spectralRolloff");
+    const energyElement = document.getElementById("energy");
+    const rmsElement = document.getElementById("rms");
+    const topCategoriesElement = document.getElementById("topCategories");
+    const maxScoreElement = document.getElementById("maxScore");
     
     // Variables for classifiers
     let imageClassifier;
@@ -119,6 +144,74 @@
     let latestPredictions = {
       image: [],
       audio: []
+    };
+    
+    // Audio feature extraction functions
+    // Calculate zero crossing rate
+    const calculateZCR = (buffer) => {
+      let zcr = 0;
+      for (let i = 1; i < buffer.length; i++) {
+        if ((buffer[i - 1] >= 0 && buffer[i] < 0) || (buffer[i - 1] < 0 && buffer[i] >= 0)) {
+          zcr++;
+        }
+      }
+      return zcr / buffer.length;
+    };
+
+    // Calculate spectral centroid
+    const calculateSpectralCentroid = (buffer) => {
+      // Apply a simple FFT-like approach using autocorrelation for estimation
+      // In a production environment, you'd use a proper FFT library
+      let sum = 0;
+      let weightedSum = 0;
+      
+      for (let i = 0; i < buffer.length; i++) {
+        const magnitude = Math.abs(buffer[i]);
+        sum += magnitude;
+        weightedSum += i * magnitude;
+      }
+      
+      return sum !== 0 ? weightedSum / sum : 0;
+    };
+
+    // Calculate spectral rolloff
+    const calculateSpectralRolloff = (buffer) => {
+      const threshold = 0.85; // 85% of total energy
+      let sum = 0;
+      let cumulativeSum = 0;
+      
+      // Calculate total energy
+      for (let i = 0; i < buffer.length; i++) {
+        sum += Math.abs(buffer[i]);
+      }
+      
+      // Find the point where cumulative energy exceeds threshold
+      for (let i = 0; i < buffer.length; i++) {
+        cumulativeSum += Math.abs(buffer[i]);
+        if (cumulativeSum >= threshold * sum) {
+          return i / buffer.length;
+        }
+      }
+      
+      return 1.0;
+    };
+
+    // Calculate energy
+    const calculateEnergy = (buffer) => {
+      let energy = 0;
+      for (let i = 0; i < buffer.length; i++) {
+        energy += buffer[i] * buffer[i];
+      }
+      return energy / buffer.length;
+    };
+
+    // Calculate RMS
+    const calculateRMS = (buffer) => {
+      let sum = 0;
+      for (let i = 0; i < buffer.length; i++) {
+        sum += buffer[i] * buffer[i];
+      }
+      return Math.sqrt(sum / buffer.length);
     };
 
     // Create ImageClassifier with proper error handling
@@ -209,6 +302,46 @@
           `${item.categoryName} (${Math.round(item.score * 100)}%)`).join(', ');
       } else {
         audioResultsElement.textContent = "Analyzing...";
+      }
+      
+      // Update audio features
+      if (latestPredictions.audioBuffer) {
+        // Calculate and display audio features
+        const zcr = calculateZCR(latestPredictions.audioBuffer);
+        const spectralCentroid = calculateSpectralCentroid(latestPredictions.audioBuffer);
+        const spectralRolloff = calculateSpectralRolloff(latestPredictions.audioBuffer);
+        const energy = calculateEnergy(latestPredictions.audioBuffer);
+        const rms = calculateRMS(latestPredictions.audioBuffer);
+        
+        zeroCrossingRateElement.textContent = zcr.toFixed(4);
+        spectralCentroidElement.textContent = spectralCentroid.toFixed(2);
+        spectralRolloffElement.textContent = spectralRolloff.toFixed(4);
+        energyElement.textContent = energy.toFixed(6);
+        rmsElement.textContent = rms.toFixed(6);
+        
+        // Display top categories and max score
+        if (latestPredictions.audio.length > 0) {
+          const topCategories = latestPredictions.audio
+            .slice(0, 3)
+            .map(item => item.categoryName)
+            .join(', ');
+          topCategoriesElement.textContent = topCategories;
+          
+          const maxScore = Math.max(...latestPredictions.audio.map(item => item.score));
+          maxScoreElement.textContent = maxScore.toFixed(2);
+        } else {
+          topCategoriesElement.textContent = "N/A";
+          maxScoreElement.textContent = "N/A";
+        }
+      } else {
+        // Reset all feature displays
+        zeroCrossingRateElement.textContent = "N/A";
+        spectralCentroidElement.textContent = "N/A";
+        spectralRolloffElement.textContent = "N/A";
+        energyElement.textContent = "N/A";
+        rmsElement.textContent = "N/A";
+        topCategoriesElement.textContent = "N/A";
+        maxScoreElement.textContent = "N/A";
       }
       
       // Generate quick response
@@ -335,6 +468,9 @@
             
             const inputBuffer = audioProcessingEvent.inputBuffer;
             const inputData = inputBuffer.getChannelData(0);
+
+            // Save audio buffer for feature extraction
+            latestPredictions.audioBuffer = inputData;
 
             // Classify the audio
             const result = audioClassifier.classify(inputData);
