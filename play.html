@@ -103,6 +103,9 @@
     
     // Import Mewt module
     import Mewt from "./mewt.js";
+    
+    // Import VLM manager
+    import { VLMChannel } from "./vlm-manager.js";
 
     // Get DOM elements
     const video = document.getElementById("webcam");
@@ -126,6 +129,33 @@
     
     // Initialize Mewt
     const mewt = new Mewt();
+    
+    // Initialize VLM Vision Channel
+    const vlmVision = new VLMChannel('vision', {
+      enabled: true,
+      minInterval: 15000,  // 15秒
+      maxPerMinute: 3      // 每分钟3次
+    });
+    
+    // State stability mechanism
+    let stableState = 'idle';
+    let pendingState = 'idle';
+    let stateChangeTime = 0;
+    let lastStableState = 'idle';
+    const STATE_DEBOUNCE_MS = 2000; // 2 seconds
+    
+    // Response deduplication
+    let lastMewtResponse = '';
+    
+    // Helper: Get current video frame as base64
+    const getCurrentFrame = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      return canvas.toDataURL('image/jpeg', 0.8);
+    };
 
     // Create ImageClassifier with proper error handling
     const createImageClassifier = async () => {
@@ -216,6 +246,9 @@
         audioResultsElement.textContent = "Analyzing...";
       }
       
+      // Get context for LRU trust
+      const context = mewt.getFullContext();
+      
       // Format predictions for Mewt
       const formattedPredictions = {
         image: latestPredictions.image.slice(0, 3).map(item => ({
@@ -228,10 +261,76 @@
         }))
       };
       
-      // Generate Mewt response
-      const mewtResponse = mewt.generateQuickResponse(formattedPredictions);
-      if (mewtResponse) {
-        mewtResponseElement.textContent = mewtResponse;
+      // Enhance visual detection with LRU trust
+      let hasVisualCat = formattedPredictions.image.some(item => 
+        item.class.toLowerCase().includes('cat') && item.score > 0.3
+      );
+      
+      if (!hasVisualCat) {
+        const recent10 = context.image_lru.recent(10);
+        const catCount = recent10.filter(item => item.isCat).length;
+        if (catCount > 0) {
+          hasVisualCat = true; // Trust LRU history
+        }
+      }
+      
+      const hasAudioCat = formattedPredictions.audio.some(item => 
+        (item.class.toLowerCase().includes('cat') || item.class.toLowerCase().includes('meow')) && 
+        item.score > 0.2
+      );
+      
+      // Determine raw state
+      let rawState = 'idle';
+      if (hasVisualCat && hasAudioCat) {
+        rawState = 'cat_both';
+      } else if (hasVisualCat) {
+        rawState = 'cat_visual';
+      } else if (hasAudioCat) {
+        rawState = 'cat_audio';
+      }
+      
+      // Apply state debouncing
+      const now = Date.now();
+      if (rawState !== pendingState) {
+        pendingState = rawState;
+        stateChangeTime = now;
+      }
+      
+      // Only update stable state if pending state persists for 2 seconds
+      if (now - stateChangeTime >= STATE_DEBOUNCE_MS) {
+        stableState = pendingState;
+        
+        // Detect state change
+        if (stableState !== lastStableState) {
+          handleStateChange(stableState, lastStableState);
+          lastStableState = stableState;
+        }
+      }
+      
+      // Get text from VLM (if locked) or use default
+      const vlmText = vlmVision.getText();
+      
+      if (vlmText) {
+        // VLM locked text (priority)
+        if (vlmText !== lastMewtResponse) {
+          mewtResponseElement.textContent = vlmText;
+          lastMewtResponse = vlmText;
+        }
+      } else {
+        // Default state responses
+        const stateResponses = {
+          'idle': '观察中...',
+          'cat_visual': '那里有只小猫',
+          'cat_audio': '诶？我好像听到小猫叫了',
+          'cat_both': '哦！是个小猫'
+        };
+        
+        const mewtResponse = stateResponses[stableState];
+        
+        if (mewtResponse && mewtResponse !== lastMewtResponse) {
+          mewtResponseElement.textContent = mewtResponse;
+          lastMewtResponse = mewtResponse;
+        }
       }
     };
 
@@ -252,7 +351,18 @@
         
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = stream;
-        video.addEventListener("loadeddata", predictWebcam);
+        
+        // Wait for video to actually start playing with valid frames
+        video.addEventListener("playing", () => {
+          setTimeout(() => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              console.log(`✓ Video ready: ${video.videoWidth}x${video.videoHeight}`);
+              predictWebcam();
+            } else {
+              console.error("Video playing but dimensions are 0");
+            }
+          }, 100);
+        });
       } catch (err) {
         console.error("Error accessing webcam:", err);
         loadingElement.innerHTML = "Error accessing webcam: " + err.message;
@@ -261,7 +371,17 @@
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ video: true });
           video.srcObject = stream;
-          video.addEventListener("loadeddata", predictWebcam);
+          
+          video.addEventListener("playing", () => {
+            setTimeout(() => {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                console.log(`✓ Video ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                predictWebcam();
+              } else {
+                console.error("Video playing but dimensions are 0");
+              }
+            }, 100);
+          });
         } catch (fallbackErr) {
           console.error("Error accessing any webcam:", fallbackErr);
           loadingElement.innerHTML = "Error accessing any webcam: " + fallbackErr.message;
@@ -342,6 +462,27 @@
       }
     };
 
+    // Handle state changes - trigger VLM when appropriate
+    const handleStateChange = async (newState, oldState) => {
+      console.log(`[State Change] ${oldState} → ${newState}`);
+      
+      // Trigger VLM on transitions involving cat_visual or cat_both
+      const hasVisual = newState === 'cat_visual' || newState === 'cat_both';
+      const hadVisual = oldState === 'cat_visual' || oldState === 'cat_both';
+      
+      if (hasVisual && !hadVisual) {
+        // Started seeing cat - call VLM
+        console.log('[VLM Trigger] 检测到猫，调用VLM确认');
+        const frame = getCurrentFrame();
+        await vlmVision.analyze({ image: frame });
+      } else if (!hasVisual && hadVisual) {
+        // Lost cat - call VLM to confirm
+        console.log('[VLM Trigger] 丢失猫，调用VLM确认');
+        const frame = getCurrentFrame();
+        await vlmVision.analyze({ image: frame });
+      }
+    };
+    
     // Initialize when page loads
     window.addEventListener("DOMContentLoaded", loadModels);
   </script>
