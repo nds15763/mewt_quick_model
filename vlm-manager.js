@@ -127,16 +127,16 @@ class VLMChannel {
   }
 
   /**
-   * 调用视觉VLM API（通过Vercel Serverless函数）
+   * 调用视觉VLM API（通过Vercel Serverless函数 - Kimi VLM）
    */
   async callVisionAPI(data) {
     try {
       // 自动使用当前域名的API端点
-      // 本地: http://localhost:3000/api/qwen3vl
-      // 生产: https://your-project.vercel.app/api/qwen3vl
-      const apiUrl = window.location.origin + '/api/qwen3vl';
+      // 本地: http://localhost:3000/api/kimi-vlm
+      // 生产: https://your-project.vercel.app/api/kimi-vlm
+      const apiUrl = window.location.origin + '/api/kimi-vlm';
       
-      console.log('[VLM] 调用API:', apiUrl);
+      console.log('[VLM] 调用Kimi API:', apiUrl);
 
       const response = await fetch(apiUrl, {
         method: 'POST',
