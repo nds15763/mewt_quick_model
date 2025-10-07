@@ -55,7 +55,7 @@
       grid-column: 1 / -1;
       grid-row: 2;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 10px;
       overflow: hidden;
     }
@@ -121,6 +121,11 @@
 
     #log-panel {
       grid-column: 1 / -1;
+    }
+
+    #vlm-result {
+      word-wrap: break-word;
+      white-space: pre-wrap;
     }
 
     .log-entry {
@@ -282,6 +287,30 @@
           <span class="status-value" id="lru-cat-count">0 cats</span>
         </div>
         <div id="lru-items">Empty</div>
+      </div>
+
+      <div class="panel">
+        <h3>📡 VLM STATUS</h3>
+        <div class="status-item">
+          <span class="status-label">Processing:</span>
+          <span class="status-value" id="vlm-processing">NO</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Calls:</span>
+          <span class="status-value" id="vlm-calls">0/3</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Last Call:</span>
+          <span class="status-value" id="vlm-last-call">Never</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Lock:</span>
+          <span class="status-value" id="vlm-lock">Unlocked</span>
+        </div>
+        <div class="status-item" style="margin-top: 10px;">
+          <span class="status-label" style="width: 100%; color: #ffff00;">Last Result:</span>
+          <div id="vlm-result" style="color: #00ff00; font-size: 11px; margin-top: 5px; padding: 5px; background: #1a1a1a; border-left: 2px solid #00ff00;">-</div>
+        </div>
       </div>
 
       <div class="panel" id="log-panel">
@@ -513,8 +542,61 @@
     const startDebugUpdates = () => {
       setInterval(() => {
         updateDebugPanels();
+        updateVLMStatus();
         updateWindowProgress();
       }, 100);
+    };
+    
+    // Update VLM status panel
+    const updateVLMStatus = () => {
+      const now = Date.now();
+      
+      // Processing status
+      document.getElementById("vlm-processing").textContent = 
+        vlmVision.isProcessing ? "YES 🔄" : "NO";
+      document.getElementById("vlm-processing").style.color = 
+        vlmVision.isProcessing ? "#ffff00" : "#00ff00";
+      
+      // Call count
+      const callCount = vlmVision.rateLimiter.callsInLastMinute.length;
+      document.getElementById("vlm-calls").textContent = `${callCount}/3`;
+      document.getElementById("vlm-calls").style.color = 
+        callCount >= 3 ? "#ff4444" : "#00ff00";
+      
+      // Last call time
+      if (vlmVision.rateLimiter.lastCallTime > 0) {
+        const secondsAgo = Math.floor((now - vlmVision.rateLimiter.lastCallTime) / 1000);
+        document.getElementById("vlm-last-call").textContent = 
+          secondsAgo === 0 ? "Just now" : `${secondsAgo}s ago`;
+      } else {
+        document.getElementById("vlm-last-call").textContent = "Never";
+      }
+      
+      // Lock status
+      const lockRemaining = Math.max(0, vlmVision.lock.until - now);
+      if (lockRemaining > 0) {
+        const secondsLeft = Math.ceil(lockRemaining / 1000);
+        document.getElementById("vlm-lock").textContent = `🔒 ${secondsLeft}s`;
+        document.getElementById("vlm-lock").style.color = "#ffff00";
+      } else {
+        document.getElementById("vlm-lock").textContent = "Unlocked";
+        document.getElementById("vlm-lock").style.color = "#888";
+      }
+      
+      // Last result
+      const vlmText = vlmVision.getText();
+      if (vlmText) {
+        document.getElementById("vlm-result").textContent = vlmText;
+        document.getElementById("vlm-result").style.borderLeftColor = "#ffff00";
+      } else if (vlmVision.lock.text) {
+        // Expired lock, show grayed out
+        document.getElementById("vlm-result").textContent = 
+          `[已过期] ${vlmVision.lock.text}`;
+        document.getElementById("vlm-result").style.borderLeftColor = "#444";
+      } else {
+        document.getElementById("vlm-result").textContent = "-";
+        document.getElementById("vlm-result").style.borderLeftColor = "#00ff00";
+      }
     };
 
     // Update debug panels

@@ -116,42 +116,76 @@ class VLMChannel {
   }
 
   /**
-   * 调用API（可被子类覆盖）
+   * 调用API
    */
   async callAPI(data) {
-    // 模拟API调用（实际使用时替换为真实API）
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const mockResult = this.generateMockResult(data);
-        resolve(mockResult);
-      }, 3000); // 模拟3秒延迟
-    });
+    if (this.type === 'vision') {
+      return await this.callVisionAPI(data);
+    } else {
+      return await this.callAudioAPI(data);
+    }
   }
 
   /**
-   * 生成模拟结果（开发用）
+   * 调用视觉VLM API（通过Vercel Serverless函数）
    */
-  generateMockResult(data) {
-    if (this.type === 'vision') {
+  async callVisionAPI(data) {
+    try {
+      // 自动使用当前域名的API端点
+      // 本地: http://localhost:3000/api/qwen3vl
+      // 生产: https://your-project.vercel.app/api/qwen3vl
+      const apiUrl = window.location.origin + '/api/qwen3vl';
+      
+      console.log('[VLM] 调用API:', apiUrl);
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          image: data.image,
+          prompt: '请描述图片中的内容，特别是是否有猫，如果有猫请详细描述猫的外观和行为。用一句简短的中文回答。'
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API请求失败 (${response.status}): ${errorText}`);
+      }
+
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'API返回失败');
+      }
+
+      console.log('[VLM] API成功:', result.text);
+
       return {
-        text: '一只白色的猫正在睡觉',
-        data: {
-          hasCat: true,
-          catType: 'white cat',
-          action: 'sleeping',
-          confidence: 0.95
-        }
+        text: result.text,
+        data: result.data
       };
-    } else {
+      
+    } catch (error) {
+      console.error('[VLM] API调用失败:', error);
+      // 降级：返回默认文案
       return {
-        text: '猫在叫妈妈（想念）',
-        data: {
-          hasMeow: true,
-          emotion: 'longing',
-          confidence: 0.88
-        }
+        text: '图像分析中...',
+        data: { hasCat: false, confidence: 0, error: error.message }
       };
     }
+  }
+
+  /**
+   * 调用音频VLM API（预留）
+   */
+  async callAudioAPI(data) {
+    // TODO: 实现音频VLM调用
+    return {
+      text: '音频分析功能开发中',
+      data: { hasMeow: false, confidence: 0 }
+    };
   }
 
   /**

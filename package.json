@@ -11,6 +11,9 @@
   "keywords": ["mediapipe", "cat-detection", "demo"],
   "author": "Your Name",
   "license": "MIT",
+  "dependencies": {
+    "openai": "^4.73.1"
+  },
   "devDependencies": {
     "serve": "^14.2.0"
   }
