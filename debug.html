@@ -1,4 +1,19 @@
 <!DOCTYPE html>
+<!--
+  Debug Page - 调试控制台
+  
+  功能：
+  1. 实时显示MediaPipe检测结果（图像+音频）
+  2. LRU缓存可视化（最近20个检测）
+  3. VLM状态监控（Processing/Calls/Lock/Result）
+  4. RN消息历史（最近10条）
+  5. 决策日志（窗口触发/状态变化）
+  
+  最新改动 (2025-10-08):
+  - 集成RN消息桥接（完整格式）
+  - RN消息面板显示：时间、source、state、text、metadata
+  - 颜色编码：state=绿色、vlm=黄色、emotion=紫色
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -313,6 +328,15 @@
         </div>
       </div>
 
+      <div class="panel">
+        <h3>📱 RN消息</h3>
+        <div class="status-item">
+          <span class="status-label">Total:</span>
+          <span class="status-value" id="rn-count">0</span>
+        </div>
+        <div id="rn-messages" style="font-size: 10px;">无消息</div>
+      </div>
+
       <div class="panel" id="log-panel">
         <h3>📝 DECISION LOG</h3>
         <div id="log-entries"></div>
@@ -335,6 +359,32 @@
     
     // Import VLM manager
     import { VLMChannel } from "./vlm-manager.js";
+    
+    // RN消息记录（debug模式）
+    const rnMessages = [];
+    window.sendToRN = function(text, source, state, metadata = {}) {
+      const message = {
+        type: 'text_update',
+        text,
+        source,
+        state,
+        timestamp: Date.now(),
+        metadata
+      };
+      
+      // 记录消息（用于debug显示）
+      rnMessages.push(message);
+      if (rnMessages.length > 50) rnMessages.shift();
+      
+      // 实际发送（如果在RN WebView中）
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(message));
+      }
+      console.log('[→ RN]', message);
+      
+      // 更新显示
+      updateRNPanel();
+    };
 
     // DOM elements
     const video = document.getElementById("webcam");
@@ -658,6 +708,23 @@
       if (newResponse !== lastResponse) {
         document.getElementById("state-response").textContent = newResponse;
         lastResponse = newResponse;
+        
+        // Send to RN with complete format
+        const source = vlmText ? 'vlm' : 'state';
+        const metadata = {
+          hasCat: state !== 'idle',
+          hasVisual: hasVisual,
+          hasAudio: hasAudio
+        };
+        
+        // Add VLM-specific metadata
+        if (vlmText) {
+          const vlmData = vlmVision.getLockData();
+          metadata.confidence = vlmData?.confidence || 0.9;
+          metadata.vlmLocked = true;
+        }
+        
+        sendToRN(newResponse, source, state, metadata);
       }
       
       // Update image detections
@@ -763,6 +830,29 @@
           
           lastWindowLog = Date.now();
         }
+      }
+    };
+
+    // Update RN message panel
+    const updateRNPanel = () => {
+      document.getElementById("rn-count").textContent = rnMessages.length;
+      const rnDiv = document.getElementById("rn-messages");
+      if (rnMessages.length > 0) {
+        rnDiv.innerHTML = rnMessages.slice(-10).reverse()
+          .map(msg => {
+            const time = new Date(msg.timestamp).toLocaleTimeString();
+            const sourceColor = msg.source === 'vlm' ? '#ffff00' : 
+                              msg.source === 'emotion' ? '#ff00ff' : '#00ff00';
+            return `<div class="lru-item" style="border-left-color: ${sourceColor}; font-size: 9px;">
+              <div style="color: #888;">[${time}] ${msg.source} → ${msg.state}</div>
+              <div style="color: #00ff00; margin-top: 2px;">${msg.text}</div>
+              <div style="color: #666; margin-top: 2px; font-size: 8px;">
+                ${JSON.stringify(msg.metadata)}
+              </div>
+            </div>`;
+          }).join('');
+      } else {
+        rnDiv.innerHTML = '无消息';
       }
     };
 

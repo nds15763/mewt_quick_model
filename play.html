@@ -1,4 +1,18 @@
 <!DOCTYPE html>
+<!--
+  Play Page - 音视频检测主页面
+  
+  功能：
+  1. MediaPipe实时图像+音频检测
+  2. Mewt四状态分类（idle/cat_visual/cat_audio/cat_both）
+  3. VLM详细分析（Kimi视觉模型）
+  4. RN通讯：发送检测结果文案
+  
+  最新改动 (2025-10-08):
+  - 集成RN消息桥接（rn-bridge.js）
+  - 发送完整消息格式：{type, text, source, state, timestamp, metadata}
+  - 统一发送逻辑：状态变化发state，VLM返回发vlm
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -106,6 +120,9 @@
     
     // Import VLM manager
     import { VLMChannel } from "./vlm-manager.js";
+    
+    // Import RN bridge
+    import sendToRN from "./rn-bridge.js";
 
     // Get DOM elements
     const video = document.getElementById("webcam");
@@ -310,27 +327,37 @@
       // Get text from VLM (if locked) or use default
       const vlmText = vlmVision.getText();
       
-      if (vlmText) {
-        // VLM locked text (priority)
-        if (vlmText !== lastMewtResponse) {
-          mewtResponseElement.textContent = vlmText;
-          lastMewtResponse = vlmText;
-        }
-      } else {
-        // Default state responses
-        const stateResponses = {
-          'idle': '观察中...',
-          'cat_visual': '那里有只小猫',
-          'cat_audio': '诶？我好像听到小猫叫了',
-          'cat_both': '哦！是个小猫'
+      // Default state responses
+      const stateResponses = {
+        'idle': '观察中...',
+        'cat_visual': '那里有只小猫',
+        'cat_audio': '诶？我好像听到小猫叫了',
+        'cat_both': '哦！是个小猫'
+      };
+      
+      // Determine final text (VLM has priority)
+      const finalText = vlmText || stateResponses[stableState];
+      
+      if (finalText && finalText !== lastMewtResponse) {
+        mewtResponseElement.textContent = finalText;
+        lastMewtResponse = finalText;
+        
+        // Send to RN with complete format
+        const source = vlmText ? 'vlm' : 'state';
+        const metadata = {
+          hasCat: stableState !== 'idle',
+          hasVisual: hasVisualCat,
+          hasAudio: hasAudioCat
         };
         
-        const mewtResponse = stateResponses[stableState];
-        
-        if (mewtResponse && mewtResponse !== lastMewtResponse) {
-          mewtResponseElement.textContent = mewtResponse;
-          lastMewtResponse = mewtResponse;
+        // Add VLM-specific metadata
+        if (vlmText) {
+          const vlmData = vlmVision.getLockData();
+          metadata.confidence = vlmData?.confidence || 0.9;
+          metadata.vlmLocked = true;
         }
+        
+        sendToRN(finalText, source, stableState, metadata);
       }
     };
 
