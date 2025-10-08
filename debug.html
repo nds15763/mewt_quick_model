@@ -360,10 +360,6 @@
     // Import VLM manager
     import { VLMChannel } from "./vlm-manager.js";
     
-    // 添加Deep Mewt状态管理 - Debug模式支持
-    // Deep Mewt状态：用于控制音视频检测的增强模式
-    window.DEEP_MEWT_ENABLED = false;
-    
     // RN消息记录（debug模式）
     const rnMessages = [];
     window.sendToRN = function(text, source, state, metadata = {}) {
@@ -390,58 +386,6 @@
       updateRNPanel();
     };
 
-    // RN消息监听器 - Debug模式支持deepmewt状态切换
-    window.addEventListener('message', function(event) {
-      try {
-        const data = JSON.parse(event.data);
-        console.log('[← RN] Debug收到消息:', data);
-        
-        if (data.type === 'deep_mewt_toggle') {
-          // 更新Deep Mewt状态
-          const previousState = window.DEEP_MEWT_ENABLED;
-          window.DEEP_MEWT_ENABLED = data.enabled;
-          
-          console.log(`🧠 [Debug] Deep Mewt模式: ${data.enabled ? 'ON' : 'OFF'} (之前: ${previousState ? 'ON' : 'OFF'})`);
-          
-          // Debug模式特有：记录状态变化（延迟记录，等待addLog函数定义）
-          setTimeout(() => {
-            if (typeof addLog === 'function') {
-              addLog(`🧠 Deep Mewt: ${data.enabled ? 'ENABLED' : 'DISABLED'}`);
-            }
-          }, 100);
-          
-          // 状态变化时的处理逻辑
-          if (data.enabled !== previousState) {
-            setTimeout(() => {
-              if (typeof addLog === 'function') {
-                addLog('🔄 Deep Mewt状态切换，增强检测模式准备就绪');
-              }
-            }, 100);
-            // TODO: 后续在这里添加debug模式下的增强逻辑
-          }
-          
-          // 向RN确认状态更新
-          sendToRN(
-            `[Debug] Deep Mewt模式已${data.enabled ? '启用' : '关闭'}`, 
-            'system', 
-            'idle', 
-            { 
-              deepMewtEnabled: window.DEEP_MEWT_ENABLED,
-              statusUpdate: true,
-              debugMode: true
-            }
-          );
-        }
-      } catch (e) {
-        console.error('[RN消息] Debug解析错误:', e);
-        setTimeout(() => {
-          if (typeof addLog === 'function') {
-            addLog(`❌ RN消息解析失败: ${e.message}`);
-          }
-        }, 100);
-      }
-    });
-
     // DOM elements
     const video = document.getElementById("webcam");
     const loadingElement = document.getElementById("loading");
@@ -460,6 +404,44 @@
       enabled: true,
       minInterval: 15000,
       maxPerMinute: 3
+    });
+    
+    // ==================== DeepMewt状态管理 ====================
+    // 添加DeepMewt状态管理：维护全局状态，接收RN控制消息
+    // 改动原因：支持RN动态切换DeepMewt模式，为后续audio+video增强做准备
+    
+    // 全局DeepMewt状态
+    window.DEEP_MEWT_ENABLED = false;
+    
+    // RN消息监听器 - 接收deep_mewt_toggle消息
+    window.addEventListener('message', function(event) {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'deep_mewt_toggle') {
+          // 更新全局状态
+          const previousState = window.DEEP_MEWT_ENABLED;
+          window.DEEP_MEWT_ENABLED = data.enabled;
+          
+          console.log(`🧠 DeepMewt状态变更: ${previousState ? 'ON' : 'OFF'} → ${data.enabled ? 'ON' : 'OFF'}`);
+          addLog(`🧠 DeepMewt: ${data.enabled ? 'ON' : 'OFF'}`);
+          
+          // 发送状态确认消息到RN
+          sendToRN(
+            `DeepMewt模式${data.enabled ? '已开启' : '已关闭'}`,
+            'system',
+            'idle',
+            { 
+              deepMewtEnabled: data.enabled,
+              previousState: previousState,
+              timestamp: Date.now()
+            }
+          );
+        }
+      } catch (e) {
+        console.error('[RN Message] 解析错误:', e);
+        addLog(`❌ RN消息解析错误: ${e.message}`);
+      }
     });
     
     // Window timer tracking
