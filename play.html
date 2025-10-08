@@ -164,6 +164,48 @@
     // Response deduplication
     let lastMewtResponse = '';
     
+    // 添加Deep Mewt状态管理 - 支持RN动态切换增强模式
+    // Deep Mewt状态：用于控制音视频检测的增强模式
+    window.DEEP_MEWT_ENABLED = false;
+    
+    // RN消息监听器 - 接收deepmewt模式切换指令
+    window.addEventListener('message', function(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('[← RN] 收到消息:', data);
+        
+        if (data.type === 'deep_mewt_toggle') {
+          // 更新Deep Mewt状态
+          const previousState = window.DEEP_MEWT_ENABLED;
+          window.DEEP_MEWT_ENABLED = data.enabled;
+          
+          console.log(`🧠 Deep Mewt模式: ${data.enabled ? 'ON' : 'OFF'} (之前: ${previousState ? 'ON' : 'OFF'})`);
+          
+          // 状态变化时的处理逻辑（为后续音视频增强功能预留）
+          if (data.enabled !== previousState) {
+            console.log('🔄 Deep Mewt状态已切换，准备启用增强检测模式');
+            // TODO: 后续在这里添加音视频增强逻辑
+            // - 调整检测频率
+            // - 启用更精细的分析
+            // - 增强VLM调用策略等
+          }
+          
+          // 向RN确认状态更新
+          sendToRN(
+            `Deep Mewt模式已${data.enabled ? '启用' : '关闭'}`, 
+            'system', 
+            'idle', 
+            { 
+              deepMewtEnabled: window.DEEP_MEWT_ENABLED,
+              statusUpdate: true 
+            }
+          );
+        }
+      } catch (e) {
+        console.error('[RN消息] 解析错误:', e);
+      }
+    });
+    
     // Helper: Get current video frame as base64
     const getCurrentFrame = () => {
       const canvas = document.createElement('canvas');
