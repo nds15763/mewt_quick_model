@@ -1,6 +1,6 @@
-const OpenAI = require('openai');
+import OpenAI from 'openai';
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   // 只允许POST请求
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
