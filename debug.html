@@ -478,9 +478,61 @@
       return canvas.toDataURL('image/jpeg', 0.8);
     };
 
+    // Start camera immediately
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }
+        });
+        video.srcObject = stream;
+        
+        return new Promise((resolve) => {
+          video.addEventListener("playing", () => {
+            setTimeout(() => {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                console.log(`✓ Camera ready: ${video.videoWidth}x${video.videoHeight}`);
+                addLog(`Camera initialized: ${video.videoWidth}x${video.videoHeight}`);
+                resolve(true);
+              } else {
+                console.error("Video playing but dimensions are 0");
+                resolve(false);
+              }
+            }, 100);
+          });
+        });
+      } catch (err) {
+        console.error("Error accessing rear camera:", err);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          video.srcObject = stream;
+          
+          return new Promise((resolve) => {
+            video.addEventListener("playing", () => {
+              setTimeout(() => {
+                if (video.videoWidth > 0 && video.videoHeight > 0) {
+                  console.log(`✓ Camera ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  addLog(`Camera initialized (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  resolve(true);
+                } else {
+                  resolve(false);
+                }
+              }, 100);
+            });
+          });
+        } catch (fallbackErr) {
+          console.error("Cannot access camera:", fallbackErr);
+          addLog("✗ Cannot access camera");
+          loadingElement.innerHTML = "Error accessing camera: " + fallbackErr.message;
+          return false;
+        }
+      }
+    };
+
     // Load models
     const loadModels = async () => {
       try {
+        loadingElement.innerHTML = "Loading image classifier...";
+        
         // Load vision
         const vision = await VisionFilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
@@ -493,6 +545,8 @@
           runningMode: "VIDEO"
         });
 
+        loadingElement.innerHTML = "Loading audio classifier...";
+        
         // Load audio
         const audio = await AudioFilesetResolver.forAudioTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8/wasm"
@@ -504,61 +558,45 @@
           maxResults: 5
         });
 
-        loadingElement.classList.add("hidden");
-        container.classList.remove("hidden");
-        startClassification();
+        return true;
       } catch (error) {
         console.error("Error loading models:", error);
         loadingElement.innerHTML = "Error: " + error.message;
+        return false;
       }
     };
 
-    // Start classification
-    const startClassification = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } }
-        });
-        video.srcObject = stream;
-        
-        // Wait for video to actually start playing with valid frames
-        video.addEventListener("playing", () => {
-          setTimeout(() => {
-            if (video.videoWidth > 0 && video.videoHeight > 0) {
-              console.log(`✓ Video ready: ${video.videoWidth}x${video.videoHeight}`);
-              addLog(`Video initialized: ${video.videoWidth}x${video.videoHeight}`);
-              predictWebcam();
-            } else {
-              console.error("Video playing but dimensions are 0");
-              addLog("⚠ Video error: dimensions are 0");
-            }
-          }, 100);
-        });
-      } catch (err) {
-        console.error("Error accessing rear camera:", err);
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          video.srcObject = stream;
-          
-          video.addEventListener("playing", () => {
-            setTimeout(() => {
-              if (video.videoWidth > 0 && video.videoHeight > 0) {
-                console.log(`✓ Video ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
-                addLog(`Video initialized (fallback): ${video.videoWidth}x${video.videoHeight}`);
-                predictWebcam();
-              } else {
-                console.error("Video playing but dimensions are 0");
-                addLog("⚠ Video error: dimensions are 0");
-              }
-            }, 100);
-          });
-        } catch (fallbackErr) {
-          console.error("Cannot access webcam:", fallbackErr);
-          addLog("✗ Cannot access webcam");
+    // Initialize: camera + models in parallel
+    const initialize = async () => {
+      loadingElement.innerHTML = "Starting camera...";
+      
+      // Start camera and load models in parallel
+      const [cameraReady, modelsReady] = await Promise.all([
+        startCamera(),
+        loadModels()
+      ]);
+      
+      if (!cameraReady || !modelsReady) {
+        if (!modelsReady) {
+          loadingElement.innerHTML = "Error loading models";
         }
+        return;
       }
+      
+      loadingElement.classList.add("hidden");
+      container.classList.remove("hidden");
+      startClassification();
+    };
 
+    // Start classification (camera already started in initialize)
+    const startClassification = async () => {
+      // Start image classification (video already playing)
+      predictWebcam();
+      
+      // Start audio classification
       startAudioClassification();
+      
+      // Start debug update loop
       startDebugUpdates();
     };
 
@@ -941,7 +979,7 @@
     };
     
     // Initialize
-    window.addEventListener("DOMContentLoaded", loadModels);
+    window.addEventListener("DOMContentLoaded", initialize);
   </script>
 </body>
 </html>

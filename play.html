@@ -161,7 +161,7 @@
     // 全局DeepMewt状态
     window.DEEP_MEWT_ENABLED = false;
     
-    // RN消息监听器 - 接收deep_mewt_toggle消息
+    // RN消息监听器 - 接收deep_mewt_toggle和capture_photo消息
     window.addEventListener('message', function(event) {
       try {
         const data = JSON.parse(event.data);
@@ -184,6 +184,28 @@
               timestamp: Date.now()
             }
           );
+        }
+        
+        // 处理拍照请求
+        if (data.type === 'capture_photo') {
+          console.log('📸 收到拍照请求，捕获当前帧...');
+          
+          // 使用现有的getCurrentFrame函数获取当前视频帧
+          const frameBase64 = getCurrentFrame();
+          
+          // 通过sendToRN返回照片数据
+          sendToRN(
+            '照片已拍摄',
+            'photo',
+            stableState,
+            {
+              imageData: frameBase64,
+              timestamp: Date.now(),
+              captureTime: new Date().toISOString()
+            }
+          );
+          
+          console.log('📸 照片已发送到RN, 大小:', frameBase64.length, '字符');
         }
       } catch (e) {
         console.error('[RN Message] 解析错误:', e);
@@ -261,21 +283,88 @@
       }
     };
 
-    // Load models sequentially to avoid conflicts
+    // Start camera immediately
+    const startCamera = async () => {
+      try {
+        const constraints = {
+          video: { facingMode: { ideal: "environment" } }
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        
+        return new Promise((resolve) => {
+          video.addEventListener("playing", () => {
+            setTimeout(() => {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                console.log(`✓ Camera ready: ${video.videoWidth}x${video.videoHeight}`);
+                resolve(true);
+              } else {
+                console.error("Video playing but dimensions are 0");
+                resolve(false);
+              }
+            }, 100);
+          });
+        });
+      } catch (err) {
+        console.error("Error accessing rear camera:", err);
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          video.srcObject = stream;
+          
+          return new Promise((resolve) => {
+            video.addEventListener("playing", () => {
+              setTimeout(() => {
+                if (video.videoWidth > 0 && video.videoHeight > 0) {
+                  console.log(`✓ Camera ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  resolve(true);
+                } else {
+                  resolve(false);
+                }
+              }, 100);
+            });
+          });
+        } catch (fallbackErr) {
+          console.error("Error accessing any camera:", fallbackErr);
+          loadingElement.innerHTML = "Error accessing camera: " + fallbackErr.message;
+          return false;
+        }
+      }
+    };
+
+    // Load models in parallel
     const loadModels = async () => {
       loadingElement.innerHTML = "Loading image classifier...<br/><small>This may take a moment</small>";
       const imageSuccess = await createImageClassifier();
       
-      if (!imageSuccess) return;
+      if (!imageSuccess) return false;
       
       loadingElement.innerHTML = "Loading audio classifier...<br/><small>This may take a moment</small>";
       const audioSuccess = await createAudioClassifier();
       
-      if (!audioSuccess) return;
+      return audioSuccess;
+    };
+
+    // Initialize: camera + models in parallel
+    const initialize = async () => {
+      loadingElement.innerHTML = "Starting camera...<br/><small>Please allow camera access</small>";
       
-      // Hide loading indicator
+      // Start camera and load models in parallel
+      const [cameraReady, modelsReady] = await Promise.all([
+        startCamera(),
+        loadModels()
+      ]);
+      
+      if (!cameraReady || !modelsReady) {
+        if (!modelsReady) {
+          loadingElement.innerHTML = "Error loading models";
+        }
+        return;
+      }
+      
+      // Hide loading indicator and show panel
       loadingElement.style.display = "none";
       predictionPanel.classList.remove("hidden");
+      
       // Start classification
       startClassification();
     };
@@ -397,59 +486,13 @@
       }
     };
 
-    // Start classification
+    // Start classification (camera already started in initialize)
     const startClassification = async () => {
       if (isRunning) return;
-      
       isRunning = true;
       
-      // Start image classification
-      try {
-        // Try to get the rear camera by specifying constraints
-        const constraints = {
-          video: {
-            facingMode: { ideal: "environment" } // Prefer rear camera
-          }
-        };
-        
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
-        
-        // Wait for video to actually start playing with valid frames
-        video.addEventListener("playing", () => {
-          setTimeout(() => {
-            if (video.videoWidth > 0 && video.videoHeight > 0) {
-              console.log(`✓ Video ready: ${video.videoWidth}x${video.videoHeight}`);
-              predictWebcam();
-            } else {
-              console.error("Video playing but dimensions are 0");
-            }
-          }, 100);
-        });
-      } catch (err) {
-        console.error("Error accessing webcam:", err);
-        loadingElement.innerHTML = "Error accessing webcam: " + err.message;
-        
-        // Fallback to default camera if rear camera is not available
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          video.srcObject = stream;
-          
-          video.addEventListener("playing", () => {
-            setTimeout(() => {
-              if (video.videoWidth > 0 && video.videoHeight > 0) {
-                console.log(`✓ Video ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
-                predictWebcam();
-              } else {
-                console.error("Video playing but dimensions are 0");
-              }
-            }, 100);
-          });
-        } catch (fallbackErr) {
-          console.error("Error accessing any webcam:", fallbackErr);
-          loadingElement.innerHTML = "Error accessing any webcam: " + fallbackErr.message;
-        }
-      }
+      // Start image classification (video already playing)
+      predictWebcam();
       
       // Start audio classification
       startAudioClassification();
@@ -547,7 +590,7 @@
     };
     
     // Initialize when page loads
-    window.addEventListener("DOMContentLoaded", loadModels);
+    window.addEventListener("DOMContentLoaded", initialize);
   </script>
 </body>
 </html>
