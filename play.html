@@ -272,8 +272,8 @@
             aspectRatio: { ideal: 9/16 }
           }
         };
-        currentVideoStream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = currentVideoStream;
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
         
         return new Promise((resolve) => {
           video.addEventListener("playing", () => {
@@ -291,13 +291,13 @@
       } catch (err) {
         console.error("Error accessing rear camera:", err);
         try {
-          currentVideoStream = await navigator.mediaDevices.getUserMedia({ 
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
               width: { ideal: 1080 },
               height: { ideal: 1920 }
             }
           });
-          video.srcObject = currentVideoStream;
+          video.srcObject = fallbackStream;
           
           return new Promise((resolve) => {
             video.addEventListener("playing", () => {
