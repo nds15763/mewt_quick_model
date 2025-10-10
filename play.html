@@ -161,7 +161,34 @@
     // 全局DeepMewt状态
     window.DEEP_MEWT_ENABLED = false;
     
-    // RN消息监听器 - 接收deep_mewt_toggle和capture_photo消息
+    // 全局摄像头流引用
+    let currentVideoStream = null;
+    
+    // 重新启动摄像头函数
+    async function restartCamera() {
+      try {
+        console.log('📷 重新获取摄像头...');
+        
+        // 如果有旧的流，先停止
+        if (currentVideoStream) {
+          currentVideoStream.getTracks().forEach(track => track.stop());
+          currentVideoStream = null;
+        }
+        
+        // 重新获取摄像头
+        const constraints = {
+          video: { facingMode: { ideal: "environment" } }
+        };
+        currentVideoStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = currentVideoStream;
+        
+        console.log('✅ 摄像头已重新获取');
+      } catch (err) {
+        console.error('❌ 重新获取摄像头失败:', err);
+      }
+    }
+    
+    // RN消息监听器 - 接收deep_mewt_toggle、capture_photo和camera_released消息
     window.addEventListener('message', function(event) {
       try {
         const data = JSON.parse(event.data);
@@ -206,6 +233,12 @@
           );
           
           console.log('📸 照片已发送到RN, 大小:', frameBase64.length, '字符');
+        }
+        
+        // 处理相机释放通知
+        if (data.type === 'camera_released') {
+          console.log('📷 收到RN相机释放通知，重新获取WebView摄像头...');
+          restartCamera();
         }
       } catch (e) {
         console.error('[RN Message] 解析错误:', e);
@@ -289,8 +322,8 @@
         const constraints = {
           video: { facingMode: { ideal: "environment" } }
         };
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
+        currentVideoStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = currentVideoStream;
         
         return new Promise((resolve) => {
           video.addEventListener("playing", () => {
@@ -308,8 +341,8 @@
       } catch (err) {
         console.error("Error accessing rear camera:", err);
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          video.srcObject = stream;
+          currentVideoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          video.srcObject = currentVideoStream;
           
           return new Promise((resolve) => {
             video.addEventListener("playing", () => {
