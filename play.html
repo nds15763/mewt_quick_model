@@ -305,101 +305,41 @@
       }
     };
 
-    // 添加多级分辨率选项：支持4K、2K、1080p等多种高清选项
-    // 改动原因：提供更多分辨率选择，确保在不同设备上都能获得最佳画质
+    // 简化摄像头约束：使用ideal约束获取1080x1920高清画质
+    // 改动原因：移除过严格的exact约束，让浏览器自动选择最接近的可用分辨率
     const startCamera = async () => {
-      // 定义多级分辨率选项（从最高到最低）
-      const resolutionOptions = [
-        // 4K Ultra HD (2160x3840)
-        {
-          name: "4K Ultra HD",
-          video: { 
-            facingMode: { ideal: "environment" },
-            width: { exact: 2160 },
-            height: { exact: 3840 },
-            frameRate: { ideal: 30, max: 60 },
-            resizeMode: "crop-and-scale"
-          }
-        },
-        // 2K QHD (1440x2560) 
-        {
-          name: "2K QHD",
-          video: { 
-            facingMode: { ideal: "environment" },
-            width: { exact: 1440 },
-            height: { exact: 2560 },
-            frameRate: { ideal: 30, max: 60 },
-            resizeMode: "crop-and-scale"
-          }
-        },
-        // Full HD+ (1080x1920) - 目标分辨率
-        {
-          name: "Full HD+ (Target)",
-          video: { 
-            facingMode: { ideal: "environment" },
-            width: { min: 1080, ideal: 1080, max: 1920 },
-            height: { min: 1920, ideal: 1920, max: 2560 },
-            aspectRatio: { ideal: 9/16 },
-            frameRate: { ideal: 30, max: 60 },
-            resizeMode: "crop-and-scale"
-          }
-        }
-      ];
-
-      // 尝试每个分辨率选项
-      for (const option of resolutionOptions) {
-        try {
-          console.log(`尝试 ${option.name} 分辨率...`);
-          const stream = await navigator.mediaDevices.getUserMedia(option);
-          video.srcObject = stream;
-        
-          return new Promise((resolve) => {
-            video.addEventListener("playing", () => {
-              setTimeout(() => {
-                if (video.videoWidth > 0 && video.videoHeight > 0) {
-                  console.log(`✓ ${option.name} 摄像头就绪: ${video.videoWidth}x${video.videoHeight}`);
-                  resolve(true);
-                } else {
-                  console.error("Video playing but dimensions are 0");
-                  resolve(false);
-                }
-              }, 100);
-            });
-          });
-        } catch (err) {
-          console.log(`${option.name} 分辨率不支持，尝试下一个...`);
-          continue; // 尝试下一个分辨率选项
-        }
-      }
-      
-      // 如果所有高分辨率都失败，使用最后的fallback
-      console.log("所有高分辨率选项都失败，使用标准fallback...");
       try {
-        // 备用方案：标准1080x1920
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({ 
-          video: { 
-            width: { exact: 1080 },
-            height: { exact: 1920 },
+        console.log("请求摄像头访问 (目标: 1080x1920)...");
+        
+        // 使用ideal约束，让浏览器选择最接近的可用分辨率
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { min: 720, ideal: 1080, max: 2160 },
+            height: { min: 1280, ideal: 1920, max: 3840 },
+            aspectRatio: { ideal: 9/16 },
             frameRate: { ideal: 30 }
           }
         });
-        video.srcObject = fallbackStream;
+        
+        video.srcObject = stream;
         
         return new Promise((resolve) => {
           video.addEventListener("playing", () => {
             setTimeout(() => {
               if (video.videoWidth > 0 && video.videoHeight > 0) {
-                console.log(`✓ Camera ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                console.log(`✓ 摄像头就绪: ${video.videoWidth}x${video.videoHeight}`);
                 resolve(true);
               } else {
+                console.error("视频播放中但尺寸为0");
                 resolve(false);
               }
             }, 100);
           });
         });
-      } catch (fallbackErr) {
-        console.error("Error accessing any camera:", fallbackErr);
-        loadingElement.innerHTML = "Error accessing camera: " + fallbackErr.message;
+      } catch (err) {
+        console.error("摄像头访问失败:", err);
+        loadingElement.innerHTML = "摄像头访问失败: " + err.message;
         return false;
       }
     };
