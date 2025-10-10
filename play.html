@@ -12,6 +12,15 @@
   - 集成RN消息桥接（rn-bridge.js）
   - 发送完整消息格式：{type, text, source, state, timestamp, metadata}
   - 统一发送逻辑：状态变化发state，VLM返回发vlm
+--><!DOCTYPE html>
+<!--
+本次改动简介：全面优化视频分辨率和画质，解决模糊问题
+改动内容：
+1. 优化摄像头分辨率约束：添加4K、2K、1080p多级分辨率选项，使用exact约束确保真实分辨率
+2. 优化CSS设置：添加高DPI支持和防模糊缩放设置，确保视频不被CSS缩放模糊
+3. 优化Canvas渲染：支持高DPI显示，添加设备像素比适配和高质量图像处理
+4. 添加更多分辨率选项：支持从4K到1080p的多级fallback机制，确保最佳画质
+目标：实现真正的1080x1920高分辨率显示，彻底解决画面模糊问题
 -->
 <html lang="en">
 <head>
@@ -19,24 +28,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MediaPipe Audio & Image Classification with Mewt</title>
   <style>
+    /* 优化高清显示：添加高DPI支持和防模糊设置 */
+    /* 改动原因：确保1080x1920高分辨率视频不被CSS缩放模糊 */
     body {
       margin: 0;
       padding: 0;
       overflow: hidden;
       background-color: #000;
       font-family: Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
     #container {
       position: relative;
       width: 100vw;
       height: 100vh;
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: crisp-edges;
     }
 
     #webcam {
       width: 100%;
       height: 100%;
       object-fit: cover;
+      /* 高清视频优化设置 */
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: crisp-edges;
+      image-rendering: pixelated;
+      transform: translateZ(0);
+      -webkit-transform: translateZ(0);
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
     }
 
     #predictionPanel {
@@ -200,14 +223,35 @@
     // Response deduplication
     let lastMewtResponse = '';
     
-    // Helper: Get current video frame as base64
+    // 优化Canvas渲染：添加高DPI支持和高质量图像处理
+    // 改动原因：确保Canvas渲染支持高分辨率显示，提升图像质量
     const getCurrentFrame = () => {
       const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // 获取设备像素比，支持高DPI显示
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      
+      // 设置Canvas实际尺寸为视频尺寸
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      return canvas.toDataURL('image/jpeg', 0.8);
+      
+      // 设置Canvas显示尺寸（考虑设备像素比）
+      canvas.style.width = video.videoWidth / devicePixelRatio + 'px';
+      canvas.style.height = video.videoHeight / devicePixelRatio + 'px';
+      
+      // 缩放Canvas上下文以匹配设备像素比
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+      
+      // 启用图像平滑和高质量渲染
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      
+      // 绘制视频帧
+      ctx.drawImage(video, 0, 0, video.videoWidth / devicePixelRatio, video.videoHeight / devicePixelRatio);
+      
+      // 返回高质量JPEG（质量设为0.95）
+      return canvas.toDataURL('image/jpeg', 0.95);
     };
 
     // Create ImageClassifier with proper error handling
@@ -261,61 +305,102 @@
       }
     };
 
-    // Start camera immediately
+    // 添加多级分辨率选项：支持4K、2K、1080p等多种高清选项
+    // 改动原因：提供更多分辨率选择，确保在不同设备上都能获得最佳画质
     const startCamera = async () => {
-      try {
-        const constraints = {
+      // 定义多级分辨率选项（从最高到最低）
+      const resolutionOptions = [
+        // 4K Ultra HD (2160x3840)
+        {
+          name: "4K Ultra HD",
           video: { 
             facingMode: { ideal: "environment" },
-            width: { ideal: 1080 },
-            height: { ideal: 1920 },
-            aspectRatio: { ideal: 9/16 }
+            width: { exact: 2160 },
+            height: { exact: 3840 },
+            frameRate: { ideal: 30, max: 60 },
+            resizeMode: "crop-and-scale"
           }
-        };
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
-        
-        return new Promise((resolve) => {
-          video.addEventListener("playing", () => {
-            setTimeout(() => {
-              if (video.videoWidth > 0 && video.videoHeight > 0) {
-                console.log(`✓ Camera ready: ${video.videoWidth}x${video.videoHeight}`);
-                resolve(true);
-              } else {
-                console.error("Video playing but dimensions are 0");
-                resolve(false);
-              }
-            }, 100);
-          });
-        });
-      } catch (err) {
-        console.error("Error accessing rear camera:", err);
+        },
+        // 2K QHD (1440x2560) 
+        {
+          name: "2K QHD",
+          video: { 
+            facingMode: { ideal: "environment" },
+            width: { exact: 1440 },
+            height: { exact: 2560 },
+            frameRate: { ideal: 30, max: 60 },
+            resizeMode: "crop-and-scale"
+          }
+        },
+        // Full HD+ (1080x1920) - 目标分辨率
+        {
+          name: "Full HD+ (Target)",
+          video: { 
+            facingMode: { ideal: "environment" },
+            width: { min: 1080, ideal: 1080, max: 1920 },
+            height: { min: 1920, ideal: 1920, max: 2560 },
+            aspectRatio: { ideal: 9/16 },
+            frameRate: { ideal: 30, max: 60 },
+            resizeMode: "crop-and-scale"
+          }
+        }
+      ];
+
+      // 尝试每个分辨率选项
+      for (const option of resolutionOptions) {
         try {
-          const fallbackStream = await navigator.mediaDevices.getUserMedia({ 
-            video: { 
-              width: { ideal: 1080 },
-              height: { ideal: 1920 }
-            }
-          });
-          video.srcObject = fallbackStream;
-          
+          console.log(`尝试 ${option.name} 分辨率...`);
+          const stream = await navigator.mediaDevices.getUserMedia(option);
+          video.srcObject = stream;
+        
           return new Promise((resolve) => {
             video.addEventListener("playing", () => {
               setTimeout(() => {
                 if (video.videoWidth > 0 && video.videoHeight > 0) {
-                  console.log(`✓ Camera ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  console.log(`✓ ${option.name} 摄像头就绪: ${video.videoWidth}x${video.videoHeight}`);
                   resolve(true);
                 } else {
+                  console.error("Video playing but dimensions are 0");
                   resolve(false);
                 }
               }, 100);
             });
           });
-        } catch (fallbackErr) {
-          console.error("Error accessing any camera:", fallbackErr);
-          loadingElement.innerHTML = "Error accessing camera: " + fallbackErr.message;
-          return false;
+        } catch (err) {
+          console.log(`${option.name} 分辨率不支持，尝试下一个...`);
+          continue; // 尝试下一个分辨率选项
         }
+      }
+      
+      // 如果所有高分辨率都失败，使用最后的fallback
+      console.log("所有高分辨率选项都失败，使用标准fallback...");
+      try {
+        // 备用方案：标准1080x1920
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { 
+            width: { exact: 1080 },
+            height: { exact: 1920 },
+            frameRate: { ideal: 30 }
+          }
+        });
+        video.srcObject = fallbackStream;
+        
+        return new Promise((resolve) => {
+          video.addEventListener("playing", () => {
+            setTimeout(() => {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                console.log(`✓ Camera ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                resolve(true);
+              } else {
+                resolve(false);
+              }
+            }, 100);
+          });
+        });
+      } catch (fallbackErr) {
+        console.error("Error accessing any camera:", fallbackErr);
+        loadingElement.innerHTML = "Error accessing camera: " + fallbackErr.message;
+        return false;
       }
     };
 
