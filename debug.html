@@ -1,326 +1,985 @@
 <!DOCTYPE html>
 <!--
-  Debug Page - Camera Access Diagnostic Tool
+  Debug Page - 调试控制台
   
-  Purpose: Diagnose why WebView camera access is failing
-  URL: https://mewt.vercel.app/debug
+  功能：
+  1. 实时显示MediaPipe检测结果（图像+音频）
+  2. LRU缓存可视化（最近20个检测）
+  3. VLM状态监控（Processing/Calls/Lock/Result）
+  4. RN消息历史（最近10条）
+  5. 决策日志（窗口触发/状态变化）
   
-  This page tests camera access step-by-step with detailed logging
+  最新改动 (2025-10-08):
+  - 集成RN消息桥接（完整格式）
+  - RN消息面板显示：时间、source、state、text、metadata
+  - 颜色编码：state=绿色、vlm=黄色、emotion=紫色
 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Camera Debug</title>
+  <title>Mewt Debug Console</title>
   <style>
-    body {
+    * {
       margin: 0;
-      padding: 20px;
-      background-color: #000;
-      color: #0f0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
       font-family: 'Courier New', monospace;
+      background: #1a1a1a;
+      color: #00ff00;
+      overflow: hidden;
+    }
+
+    #container {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      grid-template-rows: 200px 1fr;
+      height: 100vh;
+      gap: 10px;
+      padding: 10px;
+    }
+
+    #video-preview {
+      grid-column: 1;
+      grid-row: 1;
+      position: relative;
+      background: #000;
+      border: 2px solid #00ff00;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    #webcam {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #status-panel {
+      grid-column: 2;
+      grid-row: 1;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    #debug-panels {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      overflow: hidden;
+    }
+
+    .panel {
+      background: #0a0a0a;
+      border: 1px solid #00ff00;
+      border-radius: 5px;
+      padding: 10px;
+      overflow-y: auto;
+    }
+
+    .panel h3 {
+      color: #ffff00;
+      margin-bottom: 10px;
+      font-size: 14px;
+      border-bottom: 1px solid #00ff00;
+      padding-bottom: 5px;
+    }
+
+    .status-item {
+      margin: 5px 0;
       font-size: 12px;
     }
 
-    #video {
-      width: 100%;
-      max-width: 640px;
-      height: auto;
-      border: 2px solid #0f0;
-      margin-bottom: 20px;
+    .status-label {
+      color: #888;
+      display: inline-block;
+      width: 80px;
     }
 
-    #logs {
-      background-color: #111;
-      padding: 10px;
-      border: 1px solid #0f0;
-      max-height: 400px;
-      overflow-y: auto;
-      white-space: pre-wrap;
+    .status-value {
+      color: #00ff00;
+      font-weight: bold;
+    }
+
+    .detection-item {
+      display: flex;
+      justify-content: space-between;
+      margin: 3px 0;
+      font-size: 11px;
+    }
+
+    .pass {
+      color: #00ff00;
+    }
+
+    .fail {
+      color: #ff4444;
+    }
+
+    .lru-item {
+      font-size: 10px;
+      margin: 2px 0;
+      padding: 2px 5px;
+      background: #1a1a1a;
+      border-left: 2px solid #00ff00;
+    }
+
+    .lru-cat {
+      border-left-color: #ffff00;
+    }
+
+    #log-panel {
+      grid-column: 1 / -1;
+    }
+
+    #vlm-result {
       word-wrap: break-word;
+      white-space: pre-wrap;
     }
 
     .log-entry {
-      margin: 5px 0;
-      padding: 5px;
-      border-left: 3px solid #0f0;
-      padding-left: 10px;
+      font-size: 11px;
+      margin: 2px 0;
+      padding: 2px 5px;
+      border-left: 2px solid #00ff00;
     }
 
-    .log-error {
-      color: #f00;
-      border-left-color: #f00;
+    .log-time {
+      color: #888;
     }
 
-    .log-success {
-      color: #0f0;
-      border-left-color: #0f0;
+    .log-state {
+      color: #ffff00;
     }
 
-    .log-info {
-      color: #ff0;
-      border-left-color: #ff0;
+    .log-decision {
+      color: #00ff00;
     }
 
-    h1 {
-      color: #0f0;
-      margin-bottom: 20px;
-    }
-
-    button {
-      background-color: #0f0;
-      color: #000;
-      border: none;
-      padding: 10px 20px;
-      font-size: 14px;
+    .state-badge {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 3px;
       font-weight: bold;
-      cursor: pointer;
-      margin: 5px;
+      font-size: 18px;
     }
 
-    button:hover {
-      background-color: #0c0;
+    .state-idle {
+      background: #444;
+      color: #aaa;
+    }
+
+    .state-cat_visual {
+      background: #4444ff;
+      color: #fff;
+    }
+
+    .state-cat_audio {
+      background: #ff8800;
+      color: #fff;
+    }
+
+    .state-cat_both {
+      background: #00ff00;
+      color: #000;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 10px;
+      background: #333;
+      border-radius: 5px;
+      overflow: hidden;
+      margin: 5px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #00ff00, #ffff00);
+      transition: width 0.1s linear;
+    }
+
+    #loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #00ff00;
+      font-size: 24px;
+      text-align: center;
+      z-index: 1000;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #1a1a1a;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #00ff00;
+      border-radius: 4px;
     }
   </style>
 </head>
 <body>
-  <h1>🔍 Camera Access Debug Tool</h1>
+  <div id="loading">Loading models...<br/><small>This may take a moment</small></div>
   
-  <div>
-    <button onclick="testCameraAccess()">Test Camera Access</button>
-    <button onclick="clearLogs()">Clear Logs</button>
+  <div id="container" class="hidden">
+    <!-- Video Preview -->
+    <div id="video-preview">
+      <video id="webcam" autoplay playsinline muted></video>
+    </div>
+
+    <!-- Status Panel -->
+    <div id="status-panel">
+      <div class="panel">
+        <h3>🎯 CURRENT STATE</h3>
+        <div class="status-item">
+          <span class="state-badge" id="state-badge">IDLE</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Focusing:</span>
+          <span class="status-value" id="focusing-status">NO</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Response:</span>
+          <span class="status-value" id="state-response">观察中...</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>⏱️ WINDOW STATUS</h3>
+        <div class="status-item">
+          <span class="status-label">Progress:</span>
+          <div class="progress-bar">
+            <div class="progress-fill" id="window-progress"></div>
+          </div>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Image:</span>
+          <span class="status-value" id="image-count">0</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Audio:</span>
+          <span class="status-value" id="audio-count">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Debug Panels -->
+    <div id="debug-panels">
+      <div class="panel">
+        <h3>📷 IMAGE DETECTIONS</h3>
+        <div id="image-detections">Waiting...</div>
+      </div>
+
+      <div class="panel">
+        <h3>🔊 AUDIO DETECTIONS</h3>
+        <div id="audio-detections">Waiting...</div>
+      </div>
+
+      <div class="panel">
+        <h3>💾 LRU CACHE</h3>
+        <div class="status-item">
+          <span class="status-label">Size:</span>
+          <span class="status-value" id="lru-size">0/20</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Recent 10:</span>
+          <span class="status-value" id="lru-cat-count">0 cats</span>
+        </div>
+        <div id="lru-items">Empty</div>
+      </div>
+
+      <div class="panel">
+        <h3>📡 VLM STATUS</h3>
+        <div class="status-item">
+          <span class="status-label">Processing:</span>
+          <span class="status-value" id="vlm-processing">NO</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Calls:</span>
+          <span class="status-value" id="vlm-calls">0/3</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Last Call:</span>
+          <span class="status-value" id="vlm-last-call">Never</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Lock:</span>
+          <span class="status-value" id="vlm-lock">Unlocked</span>
+        </div>
+        <div class="status-item" style="margin-top: 10px;">
+          <span class="status-label" style="width: 100%; color: #ffff00;">Last Result:</span>
+          <div id="vlm-result" style="color: #00ff00; font-size: 11px; margin-top: 5px; padding: 5px; background: #1a1a1a; border-left: 2px solid #00ff00;">-</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>📱 RN消息</h3>
+        <div class="status-item">
+          <span class="status-label">Total:</span>
+          <span class="status-value" id="rn-count">0</span>
+        </div>
+        <div id="rn-messages" style="font-size: 10px;">无消息</div>
+      </div>
+
+      <div class="panel" id="log-panel">
+        <h3>📝 DECISION LOG</h3>
+        <div id="log-entries"></div>
+      </div>
+    </div>
   </div>
-  
-  <video id="video" autoplay playsinline></video>
-  <div id="logs"></div>
 
-  <script>
-    const video = document.getElementById('video');
-    const logsDiv = document.getElementById('logs');
-    let logCount = 0;
-
-    // Logging function
-    function log(message, type = 'info', data = null) {
-      logCount++;
-      const timestamp = new Date().toISOString().substr(11, 12);
-      const logEntry = document.createElement('div');
-      logEntry.className = `log-entry log-${type}`;
-      
-      let logText = `[${timestamp}] ${message}`;
-      if (data) {
-        logText += '\n' + JSON.stringify(data, null, 2);
-      }
-      
-      logEntry.textContent = logText;
-      logsDiv.appendChild(logEntry);
-      logsDiv.scrollTop = logsDiv.scrollHeight;
-      
-      // Also log to console
-      console.log(`[Debug] ${message}`, data || '');
-      
-      // Send to RN if available
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'debug_log',
-          message: message,
-          data: data,
-          timestamp: Date.now(),
-          level: type
-        }));
-      }
-    }
-
-    function clearLogs() {
-      logsDiv.innerHTML = '';
-      logCount = 0;
-      log('Logs cleared', 'info');
-    }
-
-    // Main camera test function
-    async function testCameraAccess() {
-      log('🚀 Starting camera access test...', 'info');
-      
-      // Step 1: Check if getUserMedia exists
-      log('Step 1: Checking if getUserMedia API exists...', 'info');
-      if (!navigator.mediaDevices) {
-        log('❌ navigator.mediaDevices is undefined!', 'error');
-        return;
-      }
-      log('✅ navigator.mediaDevices exists', 'success');
-      
-      if (!navigator.mediaDevices.getUserMedia) {
-        log('❌ getUserMedia function is undefined!', 'error');
-        return;
-      }
-      log('✅ getUserMedia function exists', 'success');
-      
-      // Step 2: Check permissions API
-      log('Step 2: Checking permissions API...', 'info');
-      if (navigator.permissions) {
-        try {
-          const cameraPermission = await navigator.permissions.query({ name: 'camera' });
-          log('Camera permission state:', 'info', { state: cameraPermission.state });
-          
-          const micPermission = await navigator.permissions.query({ name: 'microphone' });
-          log('Microphone permission state:', 'info', { state: micPermission.state });
-        } catch (e) {
-          log('Permissions API query failed (this is OK on some platforms)', 'info', { error: e.message });
-        }
-      } else {
-        log('Permissions API not available (this is OK)', 'info');
-      }
-      
-      // Step 3: List available devices
-      log('Step 3: Enumerating media devices...', 'info');
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(d => d.kind === 'videoinput');
-        const audioDevices = devices.filter(d => d.kind === 'audioinput');
-        
-        log('Video devices found:', 'success', { 
-          count: videoDevices.length,
-          devices: videoDevices.map(d => ({ label: d.label, deviceId: d.deviceId.substr(0, 20) + '...' }))
-        });
-        log('Audio devices found:', 'success', { 
-          count: audioDevices.length,
-          devices: audioDevices.map(d => ({ label: d.label, deviceId: d.deviceId.substr(0, 20) + '...' }))
-        });
-      } catch (e) {
-        log('❌ Failed to enumerate devices', 'error', { error: e.message, name: e.name });
-      }
-      
-      // Step 4: Request video + audio
-      log('Step 4: Requesting video + audio stream...', 'info');
-      const constraints = {
-        video: { 
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: true
+  <script type="module">
+    import {
+      ImageClassifier,
+      FilesetResolver as VisionFilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8";
+    
+    import {
+      AudioClassifier,
+      FilesetResolver as AudioFilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8";
+    
+    import Mewt from "./mewt.js";
+    
+    // Import VLM manager
+    import { VLMChannel } from "./vlm-manager.js";
+    
+    // RN消息记录（debug模式）
+    const rnMessages = [];
+    window.sendToRN = function(text, source, state, metadata = {}) {
+      const message = {
+        type: 'text_update',
+        text,
+        source,
+        state,
+        timestamp: Date.now(),
+        metadata
       };
-      log('Constraints:', 'info', constraints);
       
+      // 记录消息（用于debug显示）
+      rnMessages.push(message);
+      if (rnMessages.length > 50) rnMessages.shift();
+      
+      // 实际发送（如果在RN WebView中）
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(message));
+      }
+      console.log('[→ RN]', message);
+      
+      // 更新显示
+      updateRNPanel();
+    };
+
+    // DOM elements
+    const video = document.getElementById("webcam");
+    const loadingElement = document.getElementById("loading");
+    const container = document.getElementById("container");
+    
+    // Classifiers
+    let imageClassifier;
+    let audioClassifier;
+    let audioContext;
+    
+    // Mewt instance
+    const mewt = new Mewt();
+    
+    // Initialize VLM Vision Channel
+    const vlmVision = new VLMChannel('vision', {
+      enabled: true,
+      minInterval: 15000,
+      maxPerMinute: 3
+    });
+    
+    // ==================== DeepMewt状态管理 ====================
+    // 添加DeepMewt状态管理：维护全局状态，接收RN控制消息
+    // 改动原因：支持RN动态切换DeepMewt模式，为后续audio+video增强做准备
+    
+    // 全局DeepMewt状态
+    window.DEEP_MEWT_ENABLED = false;
+    
+    // RN消息监听器 - 接收deep_mewt_toggle消息
+    window.addEventListener('message', function(event) {
       try {
-        log('Calling getUserMedia...', 'info');
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const data = JSON.parse(event.data);
         
-        log('✅ getUserMedia SUCCESS!', 'success', {
-          videoTracks: stream.getVideoTracks().length,
-          audioTracks: stream.getAudioTracks().length
+        if (data.type === 'deep_mewt_toggle') {
+          // 更新全局状态
+          const previousState = window.DEEP_MEWT_ENABLED;
+          window.DEEP_MEWT_ENABLED = data.enabled;
+          
+          console.log(`🧠 DeepMewt状态变更: ${previousState ? 'ON' : 'OFF'} → ${data.enabled ? 'ON' : 'OFF'}`);
+          addLog(`🧠 DeepMewt: ${data.enabled ? 'ON' : 'OFF'}`);
+          
+          // 发送状态确认消息到RN
+          sendToRN(
+            `DeepMewt模式${data.enabled ? '已开启' : '已关闭'}`,
+            'system',
+            'idle',
+            { 
+              deepMewtEnabled: data.enabled,
+              previousState: previousState,
+              timestamp: Date.now()
+            }
+          );
+        }
+      } catch (e) {
+        console.error('[RN Message] 解析错误:', e);
+        addLog(`❌ RN消息解析错误: ${e.message}`);
+      }
+    });
+    
+    // Window timer tracking
+    let windowStartTime = Date.now();
+    const WINDOW_INTERVAL = 1000;
+    
+    // Log management
+    const maxLogEntries = 100;
+    const logEntries = [];
+    
+    // Latest predictions (for display only)
+    let latestPredictions = {
+      image: [],
+      audio: []
+    };
+    
+    // State stability mechanism
+    let stableState = 'idle';
+    let pendingState = 'idle';
+    let stateChangeTime = 0;
+    let lastStableState = 'idle';
+    const STATE_DEBOUNCE_MS = 2000; // 2 seconds
+    
+    // Response deduplication
+    let lastResponse = '';
+    
+    // Helper: Get current video frame as base64
+    const getCurrentFrame = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      return canvas.toDataURL('image/jpeg', 0.8);
+    };
+
+    // Start camera immediately
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }
         });
-        
-        // Step 5: Display the stream
-        log('Step 5: Attaching stream to video element...', 'info');
         video.srcObject = stream;
         
-        // Wait for video to be ready
-        video.onloadedmetadata = () => {
-          log('✅ Video metadata loaded', 'success', {
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-            duration: video.duration
-          });
-        };
-        
-        video.onplay = () => {
-          log('✅ Video playing!', 'success', {
-            currentTime: video.currentTime,
-            paused: video.paused,
-            ended: video.ended
-          });
-        };
-        
-        // Log track details
-        stream.getVideoTracks().forEach((track, i) => {
-          log(`Video Track ${i}:`, 'success', {
-            label: track.label,
-            enabled: track.enabled,
-            muted: track.muted,
-            readyState: track.readyState,
-            settings: track.getSettings()
+        return new Promise((resolve) => {
+          video.addEventListener("playing", () => {
+            setTimeout(() => {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                console.log(`✓ Camera ready: ${video.videoWidth}x${video.videoHeight}`);
+                addLog(`Camera initialized: ${video.videoWidth}x${video.videoHeight}`);
+                resolve(true);
+              } else {
+                console.error("Video playing but dimensions are 0");
+                resolve(false);
+              }
+            }, 100);
           });
         });
-        
-        stream.getAudioTracks().forEach((track, i) => {
-          log(`Audio Track ${i}:`, 'success', {
-            label: track.label,
-            enabled: track.enabled,
-            muted: track.muted,
-            readyState: track.readyState
-          });
-        });
-        
-      } catch (error) {
-        log('❌ getUserMedia FAILED', 'error', {
-          name: error.name,
-          message: error.message,
-          constraint: error.constraint,
-          stack: error.stack
-        });
-        
-        // Try fallback: video only
-        log('Attempting fallback: video only...', 'info');
+      } catch (err) {
+        console.error("Error accessing rear camera:", err);
         try {
-          const fallbackConstraints = { video: true };
-          log('Fallback constraints:', 'info', fallbackConstraints);
-          
-          const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
-          log('✅ Fallback SUCCESS (video only)', 'success', {
-            videoTracks: stream.getVideoTracks().length,
-            audioTracks: stream.getAudioTracks().length
-          });
-          
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
           video.srcObject = stream;
-        } catch (fallbackError) {
-          log('❌ Fallback also FAILED', 'error', {
-            name: fallbackError.name,
-            message: fallbackError.message,
-            constraint: fallbackError.constraint
+          
+          return new Promise((resolve) => {
+            video.addEventListener("playing", () => {
+              setTimeout(() => {
+                if (video.videoWidth > 0 && video.videoHeight > 0) {
+                  console.log(`✓ Camera ready (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  addLog(`Camera initialized (fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  resolve(true);
+                } else {
+                  resolve(false);
+                }
+              }, 100);
+            });
           });
+        } catch (fallbackErr) {
+          console.error("Cannot access camera:", fallbackErr);
+          addLog("✗ Cannot access camera");
+          loadingElement.innerHTML = "Error accessing camera: " + fallbackErr.message;
+          return false;
         }
       }
-    }
+    };
 
-    // Auto-run on load
-    window.addEventListener('DOMContentLoaded', () => {
-      log('📱 Debug page loaded', 'success', {
-        userAgent: navigator.userAgent,
-        platform: navigator.platform,
-        language: navigator.language,
-        onLine: navigator.onLine,
-        cookieEnabled: navigator.cookieEnabled
-      });
+    // Load models
+    const loadModels = async () => {
+      try {
+        loadingElement.innerHTML = "Loading image classifier...";
+        
+        // Load vision
+        const vision = await VisionFilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+        );
+        imageClassifier = await ImageClassifier.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/float32/1/efficientnet_lite0.tflite`
+          },
+          maxResults: 5,
+          runningMode: "VIDEO"
+        });
+
+        loadingElement.innerHTML = "Loading audio classifier...";
+        
+        // Load audio
+        const audio = await AudioFilesetResolver.forAudioTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8/wasm"
+        );
+        audioClassifier = await AudioClassifier.createFromOptions(audio, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite"
+          },
+          maxResults: 5
+        });
+
+        return true;
+      } catch (error) {
+        console.error("Error loading models:", error);
+        loadingElement.innerHTML = "Error: " + error.message;
+        return false;
+      }
+    };
+
+    // Initialize: camera + models in parallel
+    const initialize = async () => {
+      loadingElement.innerHTML = "Starting camera...";
       
-      log('🔍 WebView detection:', 'info', {
-        hasReactNativeWebView: !!window.ReactNativeWebView,
-        hasAndroid: !!window.Android
-      });
+      // Start camera and load models in parallel
+      const [cameraReady, modelsReady] = await Promise.all([
+        startCamera(),
+        loadModels()
+      ]);
       
-      // Auto-start test after 1 second
-      setTimeout(() => {
-        log('Auto-starting camera test in 1 second...', 'info');
-        setTimeout(testCameraAccess, 1000);
+      if (!cameraReady || !modelsReady) {
+        if (!modelsReady) {
+          loadingElement.innerHTML = "Error loading models";
+        }
+        return;
+      }
+      
+      loadingElement.classList.add("hidden");
+      container.classList.remove("hidden");
+      startClassification();
+    };
+
+    // Start classification (camera already started in initialize)
+    const startClassification = async () => {
+      // Start image classification (video already playing)
+      predictWebcam();
+      
+      // Start audio classification
+      startAudioClassification();
+      
+      // Start debug update loop
+      startDebugUpdates();
+    };
+
+    // Predict from webcam
+    const predictWebcam = async () => {
+      if (!imageClassifier || !video.videoWidth || !video.videoHeight) {
+        window.requestAnimationFrame(predictWebcam);
+        return;
+      }
+
+      try {
+        const result = imageClassifier.classifyForVideo(video, performance.now());
+        if (result.classifications.length > 0) {
+          // Save for display
+          latestPredictions.image = result.classifications[0].categories;
+          
+          // Send to mewt
+          const predictions = result.classifications[0].categories.map(cat => ({
+            class: cat.categoryName,
+            score: cat.score
+          }));
+          mewt.addImageResult(predictions);
+        }
+      } catch (error) {
+        console.error("Image classification error:", error);
+      }
+
+      window.requestAnimationFrame(predictWebcam);
+    };
+
+    // Audio classification
+    const startAudioClassification = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(stream);
+        const scriptNode = audioContext.createScriptProcessor(16384, 1, 1);
+
+        scriptNode.onaudioprocess = function (event) {
+          try {
+            if (!audioClassifier) return;
+            const inputData = event.inputBuffer.getChannelData(0);
+            const result = audioClassifier.classify(inputData);
+            const categories = result[0].classifications[0].categories;
+            
+            // Save for display
+            latestPredictions.audio = categories;
+            
+            // Send to mewt
+            const predictions = categories.map(cat => ({
+              class: cat.categoryName,
+              score: cat.score
+            }));
+            
+            mewt.addAudioResult(predictions, inputData);
+          } catch (error) {
+            console.error("Audio classification error:", error);
+          }
+        };
+
+        source.connect(scriptNode);
+        scriptNode.connect(audioContext.destination);
+      } catch (error) {
+        console.error("Cannot access microphone:", error);
+      }
+    };
+
+    // Debug update loop
+    const startDebugUpdates = () => {
+      setInterval(() => {
+        updateDebugPanels();
+        updateVLMStatus();
+        updateWindowProgress();
       }, 100);
-    });
+    };
+    
+    // Update VLM status panel
+    const updateVLMStatus = () => {
+      const now = Date.now();
+      
+      // Processing status
+      document.getElementById("vlm-processing").textContent = 
+        vlmVision.isProcessing ? "YES 🔄" : "NO";
+      document.getElementById("vlm-processing").style.color = 
+        vlmVision.isProcessing ? "#ffff00" : "#00ff00";
+      
+      // Call count
+      const callCount = vlmVision.rateLimiter.callsInLastMinute.length;
+      document.getElementById("vlm-calls").textContent = `${callCount}/3`;
+      document.getElementById("vlm-calls").style.color = 
+        callCount >= 3 ? "#ff4444" : "#00ff00";
+      
+      // Last call time
+      if (vlmVision.rateLimiter.lastCallTime > 0) {
+        const secondsAgo = Math.floor((now - vlmVision.rateLimiter.lastCallTime) / 1000);
+        document.getElementById("vlm-last-call").textContent = 
+          secondsAgo === 0 ? "Just now" : `${secondsAgo}s ago`;
+      } else {
+        document.getElementById("vlm-last-call").textContent = "Never";
+      }
+      
+      // Lock status
+      const lockRemaining = Math.max(0, vlmVision.lock.until - now);
+      if (lockRemaining > 0) {
+        const secondsLeft = Math.ceil(lockRemaining / 1000);
+        document.getElementById("vlm-lock").textContent = `🔒 ${secondsLeft}s`;
+        document.getElementById("vlm-lock").style.color = "#ffff00";
+      } else {
+        document.getElementById("vlm-lock").textContent = "Unlocked";
+        document.getElementById("vlm-lock").style.color = "#888";
+      }
+      
+      // Last result
+      const vlmText = vlmVision.getText();
+      if (vlmText) {
+        document.getElementById("vlm-result").textContent = vlmText;
+        document.getElementById("vlm-result").style.borderLeftColor = "#ffff00";
+      } else if (vlmVision.lock.text) {
+        // Expired lock, show grayed out
+        document.getElementById("vlm-result").textContent = 
+          `[已过期] ${vlmVision.lock.text}`;
+        document.getElementById("vlm-result").style.borderLeftColor = "#444";
+      } else {
+        document.getElementById("vlm-result").textContent = "-";
+        document.getElementById("vlm-result").style.borderLeftColor = "#00ff00";
+      }
+    };
 
-    // Global error handler
-    window.addEventListener('error', (e) => {
-      log('❌ Global error caught', 'error', {
-        message: e.message,
-        filename: e.filename,
-        lineno: e.lineno,
-        colno: e.colno
-      });
-    });
+    // Update debug panels
+    const updateDebugPanels = () => {
+      const context = mewt.getFullContext();
+      
+      // Enhance visual detection with LRU trust
+      let hasVisual = mewt.hasVisualCat();
+      if (!hasVisual) {
+        const recent10 = context.image_lru.recent(10);
+        const catCount = recent10.filter(item => item.isCat).length;
+        if (catCount > 0) {
+          hasVisual = true; // Trust LRU history
+        }
+      }
+      
+      const hasAudio = mewt.hasCatSound();
+      const rawState = mewt.determineState(hasVisual, hasAudio);
+      
+      // Apply state debouncing
+      const now = Date.now();
+      if (rawState !== pendingState) {
+        pendingState = rawState;
+        stateChangeTime = now;
+      }
+      
+      // Only update stable state if pending state persists for 2 seconds
+      if (now - stateChangeTime >= STATE_DEBOUNCE_MS) {
+        stableState = pendingState;
+        
+        // Detect state change
+        if (stableState !== lastStableState) {
+          handleStateChange(stableState, lastStableState);
+          lastStableState = stableState;
+        }
+      }
+      
+      const state = stableState;
+      
+      const stateBadge = document.getElementById("state-badge");
+      stateBadge.textContent = state.toUpperCase();
+      stateBadge.className = `state-badge state-${state}`;
+      
+      document.getElementById("focusing-status").textContent = 
+        context.is_now_focusing_cat ? "YES ✓" : "NO";
+      
+      // Get text from VLM (if locked) or use default
+      const vlmText = vlmVision.getText();
+      
+      const stateResponses = {
+        'idle': '观察中...',
+        'cat_visual': '那里有只小猫',
+        'cat_audio': '诶？我好像听到小猫叫了',
+        'cat_both': '哦！是个小猫'
+      };
+      
+      // Apply response deduplication (VLM text has priority)
+      const newResponse = vlmText || stateResponses[state];
+      if (newResponse !== lastResponse) {
+        document.getElementById("state-response").textContent = newResponse;
+        lastResponse = newResponse;
+        
+        // Send to RN with complete format
+        const source = vlmText ? 'vlm' : 'state';
+        const metadata = {
+          hasCat: state !== 'idle',
+          hasVisual: hasVisual,
+          hasAudio: hasAudio
+        };
+        
+        // Add VLM-specific metadata
+        if (vlmText) {
+          const vlmData = vlmVision.getLockData();
+          metadata.confidence = vlmData?.confidence || 0.9;
+          metadata.vlmLocked = true;
+        }
+        
+        sendToRN(newResponse, source, state, metadata);
+      }
+      
+      // Update image detections
+      const imageDiv = document.getElementById("image-detections");
+      if (latestPredictions.image.length > 0) {
+        const threshold = 0.3;
+        imageDiv.innerHTML = latestPredictions.image
+          .slice(0, 5)
+          .map(item => {
+            const pass = item.categoryName.toLowerCase().includes('cat') && item.score > threshold;
+            const symbol = pass ? '✓' : '✗';
+            const className = pass ? 'pass' : 'fail';
+            return `<div class="detection-item ${className}">
+              <span>${item.categoryName}</span>
+              <span>${item.score.toFixed(3)} ${symbol}</span>
+            </div>`;
+          }).join('');
+      } else {
+        imageDiv.innerHTML = '<div class="detection-item">No data</div>';
+      }
+      
+      // Update audio detections
+      const audioDiv = document.getElementById("audio-detections");
+      if (latestPredictions.audio.length > 0) {
+        const threshold = 0.2;
+        audioDiv.innerHTML = latestPredictions.audio
+          .slice(0, 5)
+          .map(item => {
+            const pass = (item.categoryName.toLowerCase().includes('cat') || 
+                         item.categoryName.toLowerCase().includes('meow')) && item.score > threshold;
+            const symbol = pass ? '✓' : '✗';
+            const className = pass ? 'pass' : 'fail';
+            return `<div class="detection-item ${className}">
+              <span>${item.categoryName}</span>
+              <span>${item.score.toFixed(3)} ${symbol}</span>
+            </div>`;
+          }).join('');
+      } else {
+        audioDiv.innerHTML = '<div class="detection-item">No data</div>';
+      }
+      
+      // Update window counts
+      document.getElementById("image-count").textContent = 
+        latestPredictions.image.length;
+      document.getElementById("audio-count").textContent = 
+        latestPredictions.audio.length;
+      
+      // Update LRU cache
+      const lruSize = context.image_lru.size();
+      document.getElementById("lru-size").textContent = `${lruSize}/20`;
+      
+      const recent10 = context.image_lru.recent(10);
+      const catCount = recent10.filter(item => item.isCat).length;
+      document.getElementById("lru-cat-count").textContent = `${catCount} cats`;
+      
+      const lruDiv = document.getElementById("lru-items");
+      if (lruSize > 0) {
+        const allValues = context.image_lru.getAllValues();
+        lruDiv.innerHTML = allValues.slice(-10).reverse()
+          .map((item, idx) => {
+            const className = item.isCat ? 'lru-item lru-cat' : 'lru-item';
+            const time = new Date(item.timestamp).toLocaleTimeString();
+            return `<div class="${className}">
+              [${idx === 0 ? 'NEW' : `-${idx}`}] ${item.class} (${item.score.toFixed(2)}) - ${time}
+            </div>`;
+          }).join('');
+      } else {
+        lruDiv.innerHTML = '<div class="lru-item">Empty</div>';
+      }
+    };
 
-    // Unhandled promise rejection handler
-    window.addEventListener('unhandledrejection', (e) => {
-      log('❌ Unhandled promise rejection', 'error', {
-        reason: e.reason,
-        promise: e.promise
-      });
-    });
+    // Update window progress
+    let lastWindowLog = 0;
+    const updateWindowProgress = () => {
+      const elapsed = Date.now() - windowStartTime;
+      const progress = Math.min((elapsed / WINDOW_INTERVAL) * 100, 100);
+      document.getElementById("window-progress").style.width = progress + '%';
+      
+      // Log window trigger
+      if (progress >= 100) {
+        windowStartTime = Date.now();
+        
+        // Log only if enough time has passed
+        if (Date.now() - lastWindowLog > 900) {
+          const context = mewt.getFullContext();
+          const hasVisual = mewt.hasVisualCat();
+          const hasAudio = mewt.hasCatSound();
+          const state = mewt.determineState(hasVisual, hasAudio);
+          
+          addLog(`Window triggered → State: ${state}`);
+          
+          if (state !== 'idle') {
+            addLog(`Detection: Visual=${hasVisual ? '✓' : '✗'} Audio=${hasAudio ? '✓' : '✗'}`);
+          }
+          
+          const recent10 = context.image_lru.recent(10);
+          const catCount = recent10.filter(item => item.isCat).length;
+          if (state === 'idle' && catCount > 0) {
+            addLog(`LRU Trust: ${catCount}/10 cats → Maintain focus`);
+          }
+          
+          addLog(`Decision: Focusing=${context.is_now_focusing_cat ? 'YES' : 'NO'}`);
+          
+          lastWindowLog = Date.now();
+        }
+      }
+    };
+
+    // Update RN message panel
+    const updateRNPanel = () => {
+      document.getElementById("rn-count").textContent = rnMessages.length;
+      const rnDiv = document.getElementById("rn-messages");
+      if (rnMessages.length > 0) {
+        rnDiv.innerHTML = rnMessages.slice(-10).reverse()
+          .map(msg => {
+            const time = new Date(msg.timestamp).toLocaleTimeString();
+            const sourceColor = msg.source === 'vlm' ? '#ffff00' : 
+                              msg.source === 'emotion' ? '#ff00ff' : '#00ff00';
+            return `<div class="lru-item" style="border-left-color: ${sourceColor}; font-size: 9px;">
+              <div style="color: #888;">[${time}] ${msg.source} → ${msg.state}</div>
+              <div style="color: #00ff00; margin-top: 2px;">${msg.text}</div>
+              <div style="color: #666; margin-top: 2px; font-size: 8px;">
+                ${JSON.stringify(msg.metadata)}
+              </div>
+            </div>`;
+          }).join('');
+      } else {
+        rnDiv.innerHTML = '无消息';
+      }
+    };
+
+    // Add log entry
+    const addLog = (message) => {
+      const time = new Date().toLocaleTimeString();
+      logEntries.push({ time, message });
+      
+      if (logEntries.length > maxLogEntries) {
+        logEntries.shift();
+      }
+      
+      const logDiv = document.getElementById("log-entries");
+      logDiv.innerHTML = logEntries.slice(-30).reverse()
+        .map(entry => `<div class="log-entry">
+          <span class="log-time">[${entry.time}]</span> ${entry.message}
+        </div>`).join('');
+    };
+
+    // Handle state changes - trigger VLM when appropriate
+    const handleStateChange = async (newState, oldState) => {
+      console.log(`[State Change] ${oldState} → ${newState}`);
+      addLog(`State Change: ${oldState} → ${newState}`);
+      
+      // Trigger VLM on transitions involving cat_visual or cat_both
+      const hasVisual = newState === 'cat_visual' || newState === 'cat_both';
+      const hadVisual = oldState === 'cat_visual' || oldState === 'cat_both';
+      
+      if (hasVisual && !hadVisual) {
+        // Started seeing cat - call VLM
+        console.log('[VLM Trigger] 检测到猫，调用VLM确认');
+        addLog('🔍 VLM: 检测到猫，正在确认...');
+        const frame = getCurrentFrame();
+        const result = await vlmVision.analyze({ image: frame });
+        if (result) {
+          addLog(`✓ VLM: ${result.text}`);
+        }
+      } else if (!hasVisual && hadVisual) {
+        // Lost cat - call VLM to confirm
+        console.log('[VLM Trigger] 丢失猫，调用VLM确认');
+        addLog('🔍 VLM: 丢失猫，正在确认...');
+        const frame = getCurrentFrame();
+        const result = await vlmVision.analyze({ image: frame });
+        if (result) {
+          addLog(`✓ VLM: ${result.text}`);
+        }
+      }
+    };
+    
+    // Initialize
+    window.addEventListener("DOMContentLoaded", initialize);
   </script>
 </body>
 </html>

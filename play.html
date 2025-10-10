@@ -161,84 +161,29 @@
     // 全局DeepMewt状态
     window.DEEP_MEWT_ENABLED = false;
     
-    // 全局摄像头流引用
-    let currentVideoStream = null;
-    
-    // 重新启动摄像头函数
-    async function restartCamera() {
-      try {
-        console.log('📷 重新获取摄像头...');
-        
-        // 如果有旧的流，先停止
-        if (currentVideoStream) {
-          currentVideoStream.getTracks().forEach(track => track.stop());
-          currentVideoStream = null;
-        }
-        
-        // 重新获取摄像头
-        const constraints = {
-          video: { facingMode: { ideal: "environment" } }
-        };
-        currentVideoStream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = currentVideoStream;
-        
-        console.log('✅ 摄像头已重新获取');
-      } catch (err) {
-        console.error('❌ 重新获取摄像头失败:', err);
-      }
-    }
-    
-    // RN消息监听器 - 接收deep_mewt_toggle、capture_photo和camera_released消息
+    // RN消息监听器 - 接收deep_mewt_toggle消息
     window.addEventListener('message', function(event) {
       try {
         const data = JSON.parse(event.data);
         
+        // 处理DeepMewt状态切换
         if (data.type === 'deep_mewt_toggle') {
-          // 更新全局状态
           const previousState = window.DEEP_MEWT_ENABLED;
           window.DEEP_MEWT_ENABLED = data.enabled;
           
-          console.log(`🧠 DeepMewt状态变更: ${previousState ? 'ON' : 'OFF'} → ${data.enabled ? 'ON' : 'OFF'}`);
+          console.log(`[DeepMewt] 状态切换: ${previousState} -> ${window.DEEP_MEWT_ENABLED}`);
           
           // 发送状态确认消息到RN
           sendToRN(
-            `DeepMewt模式${data.enabled ? '已开启' : '已关闭'}`,
-            'system',
-            'idle',
-            { 
-              deepMewtEnabled: data.enabled,
-              previousState: previousState,
-              timestamp: Date.now()
-            }
-          );
-        }
-        
-        // 处理拍照请求
-        if (data.type === 'capture_photo') {
-          console.log('📸 收到拍照请求，捕获当前帧...');
-          
-          // 使用现有的getCurrentFrame函数获取当前视频帧
-          const frameBase64 = getCurrentFrame();
-          
-          // 通过sendToRN返回照片数据
-          sendToRN(
-            '照片已拍摄',
-            'photo',
+            `DeepMewt模式已${window.DEEP_MEWT_ENABLED ? '启用' : '禁用'}`,
+            'deepmewt_status',
             stableState,
             {
-              imageData: frameBase64,
+              enabled: window.DEEP_MEWT_ENABLED,
               timestamp: Date.now(),
-              captureTime: new Date().toISOString()
+              previousState: previousState
             }
           );
-          
-          console.log('📸 照片已发送到RN, 大小:', frameBase64.length, '字符');
-        }
-        
-        // 处理相机释放通知
-        if (data.type === 'camera_released') {
-          console.log('📷 收到RN相机释放通知，重新获取WebView摄像头...');
-          restartCamera();
         }
       } catch (e) {
         console.error('[RN Message] 解析错误:', e);
@@ -320,7 +265,12 @@
     const startCamera = async () => {
       try {
         const constraints = {
-          video: { facingMode: { ideal: "environment" } }
+          video: { 
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1080 },
+            height: { ideal: 1920 },
+            aspectRatio: { ideal: 9/16 }
+          }
         };
         currentVideoStream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = currentVideoStream;
@@ -341,7 +291,12 @@
       } catch (err) {
         console.error("Error accessing rear camera:", err);
         try {
-          currentVideoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          currentVideoStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+              width: { ideal: 1080 },
+              height: { ideal: 1920 }
+            }
+          });
           video.srcObject = currentVideoStream;
           
           return new Promise((resolve) => {
@@ -519,6 +474,10 @@
       }
     };
 
+    // Frame rate control for image prediction
+    let lastPredictionTime = 0;
+    const PREDICTION_INTERVAL = 500; // 500ms = 2 frames per second
+    
     // Start classification (camera already started in initialize)
     const startClassification = async () => {
       if (isRunning) return;
@@ -534,26 +493,32 @@
     // Predict from webcam
     const predictWebcam = async () => {
       if (!imageClassifier || !video.videoWidth || !video.videoHeight) {
-        window.requestAnimationFrame(predictWebcam);
+        setTimeout(predictWebcam, PREDICTION_INTERVAL);
         return;
       }
       
       try {
-        const startTimeMs = performance.now();
-        const classificationResult = imageClassifier.classifyForVideo(video, startTimeMs);
-        const classifications = classificationResult.classifications;
+        const now = performance.now();
         
-        if (classifications.length > 0 && classifications[0].categories.length > 0) {
-          // Store the latest image predictions
-          latestPredictions.image = classifications[0].categories;
-          updateDisplay();
+        // Only predict if enough time has passed
+        if (now - lastPredictionTime >= PREDICTION_INTERVAL) {
+          lastPredictionTime = now;
+          
+          const classificationResult = imageClassifier.classifyForVideo(video, now);
+          const classifications = classificationResult.classifications;
+          
+          if (classifications.length > 0 && classifications[0].categories.length > 0) {
+            // Store the latest image predictions
+            latestPredictions.image = classifications[0].categories;
+            updateDisplay();
+          }
         }
       } catch (error) {
         console.error("Image classification error:", error);
       }
       
-      // Continue predicting
-      window.requestAnimationFrame(predictWebcam);
+      // Continue predicting with controlled frame rate
+      setTimeout(predictWebcam, PREDICTION_INTERVAL);
     };
 
     // Start audio classification
