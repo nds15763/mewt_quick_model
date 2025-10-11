@@ -34,17 +34,17 @@
     }
 
     #container {
-      display: grid;
-      grid-template-columns: 300px 1fr;
-      grid-template-rows: 200px 1fr;
+      display: flex;
+      flex-direction: column;
       height: 100vh;
-      gap: 10px;
-      padding: 10px;
+      gap: 8px;
+      padding: 8px;
+      overflow-y: auto;
     }
 
     #video-preview {
-      grid-column: 1;
-      grid-row: 1;
+      height: 120px;
+      min-height: 120px;
       position: relative;
       background: #000;
       border: 2px solid #00ff00;
@@ -59,20 +59,19 @@
     }
 
     #status-panel {
-      grid-column: 2;
-      grid-row: 1;
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
+      display: flex;
+      gap: 8px;
+      min-height: 100px;
+    }
+
+    #status-panel .panel {
+      flex: 1;
     }
 
     #debug-panels {
-      grid-column: 1 / -1;
-      grid-row: 2;
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 10px;
-      overflow: hidden;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
     }
 
     .panel {
@@ -329,12 +328,21 @@
       </div>
 
       <div class="panel">
-        <h3>📱 RN消息</h3>
+        <h3>🔼 上行消息 (RN→WebView)</h3>
         <div class="status-item">
-          <span class="status-label">Total:</span>
-          <span class="status-value" id="rn-count">0</span>
+          <span class="status-label">Count:</span>
+          <span class="status-value" id="upstream-count">0</span>
         </div>
-        <div id="rn-messages" style="font-size: 10px;">无消息</div>
+        <div id="upstream-messages" style="font-size: 9px;">无消息</div>
+      </div>
+
+      <div class="panel">
+        <h3>🔽 下行消息 (WebView→RN)</h3>
+        <div class="status-item">
+          <span class="status-label">Count:</span>
+          <span class="status-value" id="downstream-count">0</span>
+        </div>
+        <div id="downstream-messages" style="font-size: 9px;">无消息</div>
       </div>
 
       <div class="panel" id="log-panel">
@@ -360,8 +368,15 @@
     // Import VLM manager
     import { VLMChannel } from "./vlm-manager.js";
     
-    // RN消息记录（debug模式）
-    const rnMessages = [];
+    // Import RN message receiver (统一消息处理)
+    import rnReceiver from "./rn-message-receiver.js";
+    
+    // RN消息记录（debug模式） - 双向消息
+    const rnMessages = {
+      sent: [],      // 发送到RN的消息
+      received: []   // 从RN收到的消息
+    };
+    
     window.sendToRN = function(text, source, state, metadata = {}) {
       const message = {
         type: 'text_update',
@@ -369,12 +384,13 @@
         source,
         state,
         timestamp: Date.now(),
-        metadata
+        metadata,
+        direction: 'sent'
       };
       
       // 记录消息（用于debug显示）
-      rnMessages.push(message);
-      if (rnMessages.length > 50) rnMessages.shift();
+      rnMessages.sent.push(message);
+      if (rnMessages.sent.length > 50) rnMessages.sent.shift();
       
       // 实际发送（如果在RN WebView中）
       if (window.ReactNativeWebView) {
@@ -413,36 +429,78 @@
     // 全局DeepMewt状态
     window.DEEP_MEWT_ENABLED = false;
     
-    // RN消息监听器 - 接收deep_mewt_toggle消息
-    window.addEventListener('message', function(event) {
-      try {
-        const data = JSON.parse(event.data);
+    // ==================== 使用统一的 RN 消息接收器 ====================
+    // 注册消息处理器 - DRY原则，避免重复代码
+    rnReceiver
+      .on('deep_mewt_toggle', (data) => {
+        // 记录收到的消息
+        const receivedMsg = {
+          ...data,
+          direction: 'received',
+          receivedAt: Date.now()
+        };
+        rnMessages.received.push(receivedMsg);
+        if (rnMessages.received.length > 50) rnMessages.received.shift();
         
-        if (data.type === 'deep_mewt_toggle') {
-          // 更新全局状态
-          const previousState = window.DEEP_MEWT_ENABLED;
-          window.DEEP_MEWT_ENABLED = data.enabled;
-          
-          console.log(`🧠 DeepMewt状态变更: ${previousState ? 'ON' : 'OFF'} → ${data.enabled ? 'ON' : 'OFF'}`);
-          addLog(`🧠 DeepMewt: ${data.enabled ? 'ON' : 'OFF'}`);
-          
-          // 发送状态确认消息到RN
-          sendToRN(
-            `DeepMewt模式${data.enabled ? '已开启' : '已关闭'}`,
-            'system',
-            'idle',
-            { 
-              deepMewtEnabled: data.enabled,
-              previousState: previousState,
-              timestamp: Date.now()
+        addLog(`📥 收到RN消息: ${data.type}`);
+        updateRNPanel();
+        
+        // 更新全局状态
+        const previousState = window.DEEP_MEWT_ENABLED;
+        window.DEEP_MEWT_ENABLED = data.enabled;
+        
+        console.log(`🧠 DeepMewt状态变更: ${previousState ? 'ON' : 'OFF'} → ${data.enabled ? 'ON' : 'OFF'}`);
+        addLog(`🧠 DeepMewt: ${data.enabled ? 'ON' : 'OFF'}`);
+        
+        // 发送状态确认消息到RN
+        sendToRN(
+          `DeepMewt模式${data.enabled ? '已开启' : '已关闭'}`,
+          'system',
+          'idle',
+          { 
+            deepMewtEnabled: data.enabled,
+            previousState: previousState,
+            timestamp: Date.now()
+          }
+        );
+      })
+      .on('take_photo', (data) => {
+        // 记录收到的消息
+        const receivedMsg = {
+          ...data,
+          direction: 'received',
+          receivedAt: Date.now()
+        };
+        rnMessages.received.push(receivedMsg);
+        if (rnMessages.received.length > 50) rnMessages.received.shift();
+        
+        console.log('[Photo] 收到拍照请求');
+        addLog(`📸 收到拍照请求 (timestamp: ${data.timestamp})`);
+        updateRNPanel();
+        
+        // 获取当前帧截图
+        const imageData = getCurrentFrame();
+        const imageSizeKB = (imageData.length / 1024).toFixed(2);
+        
+        addLog(`📸 截图完成，大小: ${imageSizeKB} KB`);
+        
+        // 发送截图回RN
+        sendToRN(
+          '照片已拍摄',
+          'photo',
+          stableState,
+          {
+            imageData: imageData,
+            timestamp: Date.now(),
+            videoSize: {
+              width: video.videoWidth,
+              height: video.videoHeight
             }
-          );
-        }
-      } catch (e) {
-        console.error('[RN Message] 解析错误:', e);
-        addLog(`❌ RN消息解析错误: ${e.message}`);
-      }
-    });
+          }
+        );
+        
+        addLog(`📸 截图已发送到RN (${video.videoWidth}x${video.videoHeight})`);
+      });
     
     // Window timer tracking
     let windowStartTime = Date.now();
@@ -909,26 +967,52 @@
       }
     };
 
-    // Update RN message panel
+    // Update RN message panels - 上行/下行分开显示
     const updateRNPanel = () => {
-      document.getElementById("rn-count").textContent = rnMessages.length;
-      const rnDiv = document.getElementById("rn-messages");
-      if (rnMessages.length > 0) {
-        rnDiv.innerHTML = rnMessages.slice(-10).reverse()
+      // 上行消息 (RN → WebView)
+      document.getElementById("upstream-count").textContent = rnMessages.received.length;
+      const upstreamDiv = document.getElementById("upstream-messages");
+      
+      if (rnMessages.received.length > 0) {
+        upstreamDiv.innerHTML = rnMessages.received.slice(-5).reverse()
           .map(msg => {
-            const time = new Date(msg.timestamp).toLocaleTimeString();
-            const sourceColor = msg.source === 'vlm' ? '#ffff00' : 
-                              msg.source === 'emotion' ? '#ff00ff' : '#00ff00';
-            return `<div class="lru-item" style="border-left-color: ${sourceColor}; font-size: 9px;">
-              <div style="color: #888;">[${time}] ${msg.source} → ${msg.state}</div>
-              <div style="color: #00ff00; margin-top: 2px;">${msg.text}</div>
-              <div style="color: #666; margin-top: 2px; font-size: 8px;">
-                ${JSON.stringify(msg.metadata)}
-              </div>
+            const time = new Date(msg.receivedAt).toLocaleTimeString();
+            return `<div class="lru-item" style="border-left-color: #4444ff;">
+              <div style="color: #888;">[${time}] ${msg.type}</div>
+              ${msg.enabled !== undefined ? 
+                `<div style="color: #4444ff; margin-top: 2px;">enabled: ${msg.enabled}</div>` : ''}
+              ${msg.timestamp ? 
+                `<div style="color: #666; margin-top: 2px; font-size: 8px;">ts: ${msg.timestamp}</div>` : ''}
             </div>`;
           }).join('');
       } else {
-        rnDiv.innerHTML = '无消息';
+        upstreamDiv.innerHTML = '<div style="color: #666;">等待RN消息...</div>';
+      }
+      
+      // 下行消息 (WebView → RN)
+      document.getElementById("downstream-count").textContent = rnMessages.sent.length;
+      const downstreamDiv = document.getElementById("downstream-messages");
+      
+      if (rnMessages.sent.length > 0) {
+        downstreamDiv.innerHTML = rnMessages.sent.slice(-5).reverse()
+          .map(msg => {
+            const time = new Date(msg.timestamp).toLocaleTimeString();
+            
+            // source 颜色
+            const sourceColor = msg.source === 'vlm' ? '#ffff00' : 
+                              msg.source === 'emotion' ? '#ff00ff' : 
+                              msg.source === 'photo' ? '#ff8800' : 
+                              msg.source === 'system' ? '#4444ff' : '#00ff00';
+            
+            return `<div class="lru-item" style="border-left-color: ${sourceColor};">
+              <div style="color: #888;">[${time}] ${msg.source}</div>
+              ${msg.text ? `<div style="color: ${sourceColor}; margin-top: 2px;">${msg.text}</div>` : ''}
+              ${msg.metadata?.imageData ? 
+                `<div style="color: #666; margin-top: 2px; font-size: 8px;">📷 ${(msg.metadata.imageData.length/1024).toFixed(1)}KB</div>` : ''}
+            </div>`;
+          }).join('');
+      } else {
+        downstreamDiv.innerHTML = '<div style="color: #666;">无输出</div>';
       }
     };
 

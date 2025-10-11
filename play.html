@@ -64,7 +64,7 @@
 
     #predictionPanel {
       position: absolute;
-      bottom: 20px;
+      top: 20px;
       left: 20px;
       background-color: rgba(0, 0, 0, 0.7);
       color: white;
@@ -144,8 +144,11 @@
     // Import VLM manager
     import { VLMChannel } from "./vlm-manager.js";
     
-    // Import RN bridge
+    // Import RN bridge (下行消息)
     import sendToRN from "./rn-bridge.js";
+    
+    // Import RN message receiver (上行消息 - 统一处理)
+    import rnReceiver from "./rn-message-receiver.js";
 
     // Get DOM elements
     const video = document.getElementById("webcam");
@@ -184,34 +187,50 @@
     // 全局DeepMewt状态
     window.DEEP_MEWT_ENABLED = false;
     
-    // RN消息监听器 - 接收deep_mewt_toggle消息
-    window.addEventListener('message', function(event) {
-      try {
-        const data = JSON.parse(event.data);
+    // ==================== 使用统一的 RN 消息接收器 ====================
+    // 注册消息处理器 - DRY原则，与debug.html共享相同逻辑
+    rnReceiver
+      .on('deep_mewt_toggle', (data) => {
+        const previousState = window.DEEP_MEWT_ENABLED;
+        window.DEEP_MEWT_ENABLED = data.enabled;
         
-        // 处理DeepMewt状态切换
-        if (data.type === 'deep_mewt_toggle') {
-          const previousState = window.DEEP_MEWT_ENABLED;
-          window.DEEP_MEWT_ENABLED = data.enabled;
-          
-          console.log(`[DeepMewt] 状态切换: ${previousState} -> ${window.DEEP_MEWT_ENABLED}`);
-          
-          // 发送状态确认消息到RN
-          sendToRN(
-            `DeepMewt模式已${window.DEEP_MEWT_ENABLED ? '启用' : '禁用'}`,
-            'deepmewt_status',
-            stableState,
-            {
-              enabled: window.DEEP_MEWT_ENABLED,
-              timestamp: Date.now(),
-              previousState: previousState
+        console.log(`[DeepMewt] 状态切换: ${previousState} -> ${window.DEEP_MEWT_ENABLED}`);
+        
+        // 发送状态确认消息到RN
+        sendToRN(
+          `DeepMewt模式已${window.DEEP_MEWT_ENABLED ? '启用' : '禁用'}`,
+          'system',
+          stableState,
+          {
+            enabled: window.DEEP_MEWT_ENABLED,
+            timestamp: Date.now(),
+            previousState: previousState
+          }
+        );
+      })
+      .on('take_photo', (data) => {
+        console.log('[Photo] 收到拍照请求');
+        
+        // 获取当前帧截图
+        const imageData = getCurrentFrame();
+        
+        // 发送截图回RN
+        sendToRN(
+          '照片已拍摄',
+          'photo',
+          stableState,
+          {
+            imageData: imageData,
+            timestamp: Date.now(),
+            videoSize: {
+              width: video.videoWidth,
+              height: video.videoHeight
             }
-          );
-        }
-      } catch (e) {
-        console.error('[RN Message] 解析错误:', e);
-      }
-    });
+          }
+        );
+        
+        console.log('[Photo] 截图已发送到RN');
+      });
     
     // State stability mechanism
     let stableState = 'idle';
@@ -305,20 +324,18 @@
       }
     };
 
-    // 简化摄像头约束：使用ideal约束获取1080x1920高清画质
-    // 改动原因：移除过严格的exact约束，让浏览器自动选择最接近的可用分辨率
+    // 极简摄像头约束：只使用ideal值，避免OverconstrainedError
+    // 改动原因：移除所有min/max和aspectRatio约束，避免过度约束导致的失败
     const startCamera = async () => {
       try {
         console.log("请求摄像头访问 (目标: 1080x1920)...");
         
-        // 使用ideal约束，让浏览器选择最接近的可用分辨率
+        // 只使用ideal约束，完全移除min/max和aspectRatio
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
-            width: { min: 720, ideal: 1080, max: 2160 },
-            height: { min: 1280, ideal: 1920, max: 3840 },
-            aspectRatio: { ideal: 9/16 },
-            frameRate: { ideal: 30 }
+            width: { ideal: 1080 },
+            height: { ideal: 1920 }
           }
         });
         
@@ -338,9 +355,31 @@
           });
         });
       } catch (err) {
-        console.error("摄像头访问失败:", err);
-        loadingElement.innerHTML = "摄像头访问失败: " + err.message;
-        return false;
+        // 如果ideal约束也失败，使用完全无约束的fallback
+        console.log("ideal约束失败，尝试无约束模式...");
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true  // 完全无约束，接受任何分辨率
+          });
+          video.srcObject = stream;
+          
+          return new Promise((resolve) => {
+            video.addEventListener("playing", () => {
+              setTimeout(() => {
+                if (video.videoWidth > 0 && video.videoHeight > 0) {
+                  console.log(`✓ 摄像头就绪(fallback): ${video.videoWidth}x${video.videoHeight}`);
+                  resolve(true);
+                } else {
+                  resolve(false);
+                }
+              }, 100);
+            });
+          });
+        } catch (fallbackErr) {
+          console.error("摄像头访问失败:", fallbackErr);
+          loadingElement.innerHTML = "摄像头访问失败: " + fallbackErr.message;
+          return false;
+        }
       }
     };
 
