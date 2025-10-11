@@ -415,7 +415,9 @@
       
       // Hide loading indicator and show panel
       loadingElement.style.display = "none";
-      predictionPanel.classList.remove("hidden");
+      // 隐藏预测面板：注释掉显示逻辑，保持面板隐藏状态
+      // 改动原因：用户要求隐藏predictionPanel
+      // predictionPanel.classList.remove("hidden");
       
       // Start classification
       startClassification();
