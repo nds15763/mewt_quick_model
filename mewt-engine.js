@@ -19,6 +19,13 @@ import { StateManager } from './state-manager.js';
 import { WindowProcessor } from './window-processor.js';
 import sendToRN from './rn-bridge.js';
 import rnReceiver from './rn-message-receiver.js';
+import { 
+  StateChangeObserverManager,
+  RNMessengerObserver,
+  VLMTriggerObserver,
+  LoggerObserver,
+  UINotifierObserver
+} from './state-change-observer.js';
 
 /**
  * Mewt 检测引擎类
@@ -27,9 +34,9 @@ import rnReceiver from './rn-message-receiver.js';
 export class MewtEngine {
   /*
   方法名：初始化引擎
-  方法简介：创建 MewtEngine 实例，初始化所有子模块（Mewt、StateManager、VLM等），
-            设置状态管理和回调函数，注册 RN 消息处理器。
-  业务域关键词：引擎初始化、Mewt实例、状态管理器、VLM管理、窗口处理器、RN消息、回调注册
+  方法简介：创建 MewtEngine 实例，初始化所有子模块和观察者系统，
+            注册状态变化观察者，配置 RN 消息处理器。
+  业务域关键词：引擎初始化、观察者模式、状态管理器、VLM管理、观察者注册、RN消息
   Param: config - 配置对象，包含回调函数和各模块配置
   */
   constructor(config = {}) {
@@ -100,9 +107,42 @@ export class MewtEngine {
     
     this.deepMewtEnabled = false;
     
+    // ========== 状态变化观察者系统 ==========
+    
+    this.stateChangeObserverManager = new StateChangeObserverManager();
+    
+    // 注册默认观察者（按优先级顺序）
+    this._initializeObservers();
+    
     // ========== 注册 RN 消息处理器 ==========
     
     this._registerRNMessageHandlers();
+  }
+
+  /*
+  方法名：初始化观察者
+  方法简介：创建并注册所有状态变化观察者，设置优先级和执行顺序。
+  业务域关键词：观察者初始化、观察者注册、优先级设置、RN消息观察者、VLM观察者
+  */
+  _initializeObservers() {
+    // 1. 日志记录（最高优先级，先记录）
+    const loggerObserver = new LoggerObserver();
+    this.stateChangeObserverManager.addObserver(loggerObserver, 100);
+    
+    // 2. RN 消息发送（高优先级）
+    const rnMessenger = new RNMessengerObserver();
+    this.stateChangeObserverManager.addObserver(rnMessenger, 90);
+    
+    // 3. VLM 触发（中等优先级）
+    const vlmTrigger = new VLMTriggerObserver(
+      this.vlmVision,
+      () => this.getCurrentFrame()
+    );
+    this.stateChangeObserverManager.addObserver(vlmTrigger, 50);
+    
+    // 4. UI 通知（较低优先级，最后通知）
+    const uiNotifier = new UINotifierObserver();
+    this.stateChangeObserverManager.addObserver(uiNotifier, 10);
   }
 
   // ========== 核心检测处理方法 ==========
@@ -172,9 +212,9 @@ export class MewtEngine {
 
   /*
   方法名：更新检测状态
-  方法简介：使用 Mewt 标准方法判断视觉和音频检测状态，结合 LRU 信任机制，
-            应用防抖处理，生成最终响应文本并通知 UI 层。
-  业务域关键词：状态判断、LRU信任、防抖机制、VLM文本、响应生成、UI回调
+  方法简介：使用 Mewt 标准方法判断视觉和音频检测状态，应用防抖处理，
+            检测状态变化时通过观察者系统触发所有后续操作。
+  业务域关键词：状态判断、LRU信任、防抖机制、观察者通知、状态变化事件
   */
   updateState() {
     const context = this.mewt.getFullContext();
@@ -203,9 +243,9 @@ export class MewtEngine {
     if (now - this.state.changeTime >= this.STATE_DEBOUNCE_MS) {
       this.state.stable = this.state.pending;
       
-      // 检测状态变化
+      // 检测状态变化 - 通过观察者系统处理
       if (this.state.stable !== this.state.lastStable) {
-        this.handleStateChange(this.state.stable, this.state.lastStable);
+        this._notifyStateChange(this.state.stable, this.state.lastStable, hasVisual, hasAudio);
         this.state.lastStable = this.state.stable;
       }
     }
@@ -248,56 +288,40 @@ export class MewtEngine {
     }
   }
 
-  // ========== 状态变化处理 ==========
+  // ========== 状态变化通知 ==========
 
   /*
-  方法名：处理状态变化
-  方法简介：当稳定状态发生变化时触发，判断是否需要调用 VLM 进行视觉确认，
-            并通知 UI 层状态变化事件。
-  业务域关键词：状态变化、VLM触发、视觉确认、状态转换、UI通知
+  方法名：通知状态变化
+  方法简介：构建状态变化事件对象，通过观察者管理器通知所有已注册观察者。
+  业务域关键词：状态变化通知、观察者事件、事件分发、状态事件构建
   Param: newState - 新状态
   Param: oldState - 旧状态
+  Param: hasVisual - 是否有视觉检测
+  Param: hasAudio - 是否有音频检测
   */
-  async handleStateChange(newState, oldState) {
-    // 记录日志
-    if (this.callbacks.onLog) {
-      this.callbacks.onLog(`[State Change] ${oldState} → ${newState}`);
-    }
+  _notifyStateChange(newState, oldState, hasVisual, hasAudio) {
+    // 获取 VLM 文本
+    const vlmText = this.vlmVision.getText();
     
-    // 通知 UI 层
-    if (this.callbacks.onStateChange) {
-      this.callbacks.onStateChange(newState, oldState);
-    }
+    // 构建状态变化事件对象
+    const event = {
+      newState,
+      oldState,
+      timestamp: Date.now(),
+      vlmText,
+      metadata: {
+        hasVisual,
+        hasAudio,
+        isFocusing: this.mewt.getFullContext().is_now_focusing_cat
+      },
+      // 传递回调函数供观察者使用
+      onVLMResult: this.callbacks.onVLMResult,
+      onLog: this.callbacks.onLog,
+      onStateChange: this.callbacks.onStateChange
+    };
     
-    // 判断是否需要触发 VLM
-    const hasVisual = newState === 'cat_visual' || newState === 'cat_both';
-    const hadVisual = oldState === 'cat_visual' || oldState === 'cat_both';
-    
-    if (hasVisual && !hadVisual) {
-      // 开始看到猫 - 调用 VLM 确认
-      if (this.callbacks.onLog) {
-        this.callbacks.onLog('[VLM Trigger] 检测到猫，调用VLM确认');
-      }
-      const frame = this.getCurrentFrame();
-      if (frame) {
-        const result = await this.vlmVision.analyze({ image: frame });
-        if (result && this.callbacks.onVLMResult) {
-          this.callbacks.onVLMResult(result);
-        }
-      }
-    } else if (!hasVisual && hadVisual) {
-      // 丢失猫 - 调用 VLM 确认
-      if (this.callbacks.onLog) {
-        this.callbacks.onLog('[VLM Trigger] 丢失猫，调用VLM确认');
-      }
-      const frame = this.getCurrentFrame();
-      if (frame) {
-        const result = await this.vlmVision.analyze({ image: frame });
-        if (result && this.callbacks.onVLMResult) {
-          this.callbacks.onVLMResult(result);
-        }
-      }
-    }
+    // 通知所有观察者
+    this.stateChangeObserverManager.notify(event);
   }
 
   // ========== 工具方法 ==========
