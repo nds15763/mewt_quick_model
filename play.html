@@ -138,17 +138,11 @@
       FilesetResolver as AudioFilesetResolver
     } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8";
     
-    // Import Mewt module
-    import Mewt from "./mewt.js";
-    
-    // Import VLM manager
-    import { VLMChannel } from "./vlm-manager.js";
+    // Import unified MewtEngine
+    import { MewtEngine } from "./mewt-engine.js";
     
     // Import RN bridge (下行消息)
     import sendToRN from "./rn-bridge.js";
-    
-    // Import RN message receiver (上行消息 - 统一处理)
-    import rnReceiver from "./rn-message-receiver.js";
 
     // Get DOM elements
     const video = document.getElementById("webcam");
@@ -164,114 +158,14 @@
     let audioContext;
     let isRunning = false;
     
-    // Storage for latest predictions
-    let latestPredictions = {
-      image: [],
-      audio: []
-    };
-    
-    // Initialize Mewt
-    const mewt = new Mewt();
-    
-    // Initialize VLM Vision Channel
-    const vlmVision = new VLMChannel('vision', {
-      enabled: true,
-      minInterval: 15000,  // 15秒
-      maxPerMinute: 3      // 每分钟3次
+    // ========== 初始化统一引擎 ==========
+    const engine = new MewtEngine({
+      onPredictionUpdate: (data) => {
+        // 引擎通知：预测结果更新
+        updateDisplay(data);
+      }
     });
     
-    // ==================== DeepMewt状态管理 ====================
-    // 添加DeepMewt状态管理：维护全局状态，接收RN控制消息
-    // 改动原因：支持RN动态切换DeepMewt模式，为后续audio+video增强做准备
-    
-    // 全局DeepMewt状态
-    window.DEEP_MEWT_ENABLED = false;
-    
-    // ==================== 使用统一的 RN 消息接收器 ====================
-    // 注册消息处理器 - DRY原则，与debug.html共享相同逻辑
-    rnReceiver
-      .on('deep_mewt_toggle', (data) => {
-        const previousState = window.DEEP_MEWT_ENABLED;
-        window.DEEP_MEWT_ENABLED = data.enabled;
-        
-        console.log(`[DeepMewt] 状态切换: ${previousState} -> ${window.DEEP_MEWT_ENABLED}`);
-        
-        // 发送状态确认消息到RN
-        sendToRN(
-          `DeepMewt模式已${window.DEEP_MEWT_ENABLED ? '启用' : '禁用'}`,
-          'system',
-          stableState,
-          {
-            enabled: window.DEEP_MEWT_ENABLED,
-            timestamp: Date.now(),
-            previousState: previousState
-          }
-        );
-      })
-      .on('take_photo', (data) => {
-        console.log('[Photo] 收到拍照请求');
-        
-        // 获取当前帧截图
-        const imageData = getCurrentFrame();
-        
-        // 发送截图回RN
-        sendToRN(
-          '照片已拍摄',
-          'photo',
-          stableState,
-          {
-            imageData: imageData,
-            timestamp: Date.now(),
-            videoSize: {
-              width: video.videoWidth,
-              height: video.videoHeight
-            }
-          }
-        );
-        
-        console.log('[Photo] 截图已发送到RN');
-      });
-    
-    // State stability mechanism
-    let stableState = 'idle';
-    let pendingState = 'idle';
-    let stateChangeTime = 0;
-    let lastStableState = 'idle';
-    const STATE_DEBOUNCE_MS = 2000; // 2 seconds
-    
-    // Response deduplication
-    let lastMewtResponse = '';
-    
-    // 优化Canvas渲染：添加高DPI支持和高质量图像处理
-    // 改动原因：确保Canvas渲染支持高分辨率显示，提升图像质量
-    const getCurrentFrame = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      
-      // 获取设备像素比，支持高DPI显示
-      const devicePixelRatio = window.devicePixelRatio || 1;
-      
-      // 设置Canvas实际尺寸为视频尺寸
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      
-      // 设置Canvas显示尺寸（考虑设备像素比）
-      canvas.style.width = video.videoWidth / devicePixelRatio + 'px';
-      canvas.style.height = video.videoHeight / devicePixelRatio + 'px';
-      
-      // 缩放Canvas上下文以匹配设备像素比
-      ctx.scale(devicePixelRatio, devicePixelRatio);
-      
-      // 启用图像平滑和高质量渲染
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      
-      // 绘制视频帧
-      ctx.drawImage(video, 0, 0, video.videoWidth / devicePixelRatio, video.videoHeight / devicePixelRatio);
-      
-      // 返回高质量JPEG（质量设为0.95）
-      return canvas.toDataURL('image/jpeg', 0.95);
-    };
 
     // Create ImageClassifier with proper error handling
     const createImageClassifier = async () => {
@@ -419,125 +313,50 @@
       // 改动原因：用户要求隐藏predictionPanel
       // predictionPanel.classList.remove("hidden");
       
+      // 设置视频元素引用
+      engine.setVideoElement(video);
+      
       // Start classification
       startClassification();
     };
 
-    // Update the display
-    const updateDisplay = () => {
-      // Update raw predictions
-      if (latestPredictions.image.length > 0) {
-        const topImages = latestPredictions.image.slice(0, 3);
+    // Update the display (called by engine via callback)
+    const updateDisplay = (data) => {
+      // Update raw predictions display
+      if (data.image && data.image.length > 0) {
+        const topImages = data.image.slice(0, 3);
         imageResultsElement.textContent = topImages.map(item => 
           `${item.categoryName} (${Math.round(item.score * 100)}%)`).join(', ');
       } else {
         imageResultsElement.textContent = "Analyzing...";
       }
       
-      if (latestPredictions.audio.length > 0) {
-        const topAudios = latestPredictions.audio.slice(0, 3);
+      if (data.audio && data.audio.length > 0) {
+        const topAudios = data.audio.slice(0, 3);
         audioResultsElement.textContent = topAudios.map(item => 
           `${item.categoryName} (${Math.round(item.score * 100)}%)`).join(', ');
       } else {
         audioResultsElement.textContent = "Analyzing...";
       }
       
-      // Get context for LRU trust
-      const context = mewt.getFullContext();
+      // Update Mewt response display
+      mewtResponseElement.textContent = data.text;
       
-      // Format predictions for Mewt
-      const formattedPredictions = {
-        image: latestPredictions.image.slice(0, 3).map(item => ({
-          class: item.categoryName,
-          score: item.score
-        })),
-        audio: latestPredictions.audio.slice(0, 3).map(item => ({
-          class: item.categoryName,
-          score: item.score
-        }))
+      // Send to RN with complete format
+      const source = data.vlmLocked ? 'vlm' : 'state';
+      const metadata = {
+        hasCat: data.state !== 'idle',
+        hasVisual: data.hasVisual,
+        hasAudio: data.hasAudio
       };
       
-      // Enhance visual detection with LRU trust
-      let hasVisualCat = formattedPredictions.image.some(item => 
-        item.class.toLowerCase().includes('cat') && item.score > 0.3
-      );
-      
-      if (!hasVisualCat) {
-        const recent10 = context.image_lru.recent(10);
-        const catCount = recent10.filter(item => item.isCat).length;
-        if (catCount > 0) {
-          hasVisualCat = true; // Trust LRU history
-        }
+      // Add VLM-specific metadata
+      if (data.vlmLocked) {
+        metadata.confidence = 0.9;
+        metadata.vlmLocked = true;
       }
       
-      const hasAudioCat = formattedPredictions.audio.some(item => 
-        (item.class.toLowerCase().includes('cat') || item.class.toLowerCase().includes('meow')) && 
-        item.score > 0.2
-      );
-      
-      // Determine raw state
-      let rawState = 'idle';
-      if (hasVisualCat && hasAudioCat) {
-        rawState = 'cat_both';
-      } else if (hasVisualCat) {
-        rawState = 'cat_visual';
-      } else if (hasAudioCat) {
-        rawState = 'cat_audio';
-      }
-      
-      // Apply state debouncing
-      const now = Date.now();
-      if (rawState !== pendingState) {
-        pendingState = rawState;
-        stateChangeTime = now;
-      }
-      
-      // Only update stable state if pending state persists for 2 seconds
-      if (now - stateChangeTime >= STATE_DEBOUNCE_MS) {
-        stableState = pendingState;
-        
-        // Detect state change
-        if (stableState !== lastStableState) {
-          handleStateChange(stableState, lastStableState);
-          lastStableState = stableState;
-        }
-      }
-      
-      // Get text from VLM (if locked) or use default
-      const vlmText = vlmVision.getText();
-      
-      // Default state responses
-      const stateResponses = {
-        'idle': '观察中...',
-        'cat_visual': '那里有只小猫',
-        'cat_audio': '诶？我好像听到小猫叫了',
-        'cat_both': '哦！是个小猫'
-      };
-      
-      // Determine final text (VLM has priority)
-      const finalText = vlmText || stateResponses[stableState];
-      
-      if (finalText && finalText !== lastMewtResponse) {
-        mewtResponseElement.textContent = finalText;
-        lastMewtResponse = finalText;
-        
-        // Send to RN with complete format
-        const source = vlmText ? 'vlm' : 'state';
-        const metadata = {
-          hasCat: stableState !== 'idle',
-          hasVisual: hasVisualCat,
-          hasAudio: hasAudioCat
-        };
-        
-        // Add VLM-specific metadata
-        if (vlmText) {
-          const vlmData = vlmVision.getLockData();
-          metadata.confidence = vlmData?.confidence || 0.9;
-          metadata.vlmLocked = true;
-        }
-        
-        sendToRN(finalText, source, stableState, metadata);
-      }
+      sendToRN(data.text, source, data.state, metadata);
     };
 
     // Frame rate control for image prediction
@@ -571,13 +390,8 @@
           lastPredictionTime = now;
           
           const classificationResult = imageClassifier.classifyForVideo(video, now);
-          const classifications = classificationResult.classifications;
-          
-          if (classifications.length > 0 && classifications[0].categories.length > 0) {
-            // Store the latest image predictions
-            latestPredictions.image = classifications[0].categories;
-            updateDisplay();
-          }
+          // 使用统一引擎处理图像结果
+          engine.handleImageResult(classificationResult.classifications);
         }
       } catch (error) {
         console.error("Image classification error:", error);
@@ -614,11 +428,8 @@
 
             // Classify the audio
             const result = audioClassifier.classify(inputData);
-            const categories = result[0].classifications[0].categories;
-
-            // Store the latest audio predictions
-            latestPredictions.audio = categories;
-            updateDisplay();
+            // 使用统一引擎处理音频结果
+            engine.handleAudioResult(result, inputData);
           } catch (error) {
             console.error("Audio classification error:", error);
           }
@@ -632,26 +443,6 @@
       }
     };
 
-    // Handle state changes - trigger VLM when appropriate
-    const handleStateChange = async (newState, oldState) => {
-      console.log(`[State Change] ${oldState} → ${newState}`);
-      
-      // Trigger VLM on transitions involving cat_visual or cat_both
-      const hasVisual = newState === 'cat_visual' || newState === 'cat_both';
-      const hadVisual = oldState === 'cat_visual' || oldState === 'cat_both';
-      
-      if (hasVisual && !hadVisual) {
-        // Started seeing cat - call VLM
-        console.log('[VLM Trigger] 检测到猫，调用VLM确认');
-        const frame = getCurrentFrame();
-        await vlmVision.analyze({ image: frame });
-      } else if (!hasVisual && hadVisual) {
-        // Lost cat - call VLM to confirm
-        console.log('[VLM Trigger] 丢失猫，调用VLM确认');
-        const frame = getCurrentFrame();
-        await vlmVision.analyze({ image: frame });
-      }
-    };
     
     // Initialize when page loads
     window.addEventListener("DOMContentLoaded", initialize);

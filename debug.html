@@ -363,43 +363,13 @@
       FilesetResolver as AudioFilesetResolver
     } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.8";
     
-    import Mewt from "./mewt.js";
-    
-    // Import VLM manager
-    import { VLMChannel } from "./vlm-manager.js";
-    
-    // Import RN message receiver (统一消息处理)
-    import rnReceiver from "./rn-message-receiver.js";
+    // Import unified MewtEngine
+    import { MewtEngine } from "./mewt-engine.js";
     
     // RN消息记录（debug模式） - 双向消息
     const rnMessages = {
       sent: [],      // 发送到RN的消息
       received: []   // 从RN收到的消息
-    };
-    
-    window.sendToRN = function(text, source, state, metadata = {}) {
-      const message = {
-        type: 'text_update',
-        text,
-        source,
-        state,
-        timestamp: Date.now(),
-        metadata,
-        direction: 'sent'
-      };
-      
-      // 记录消息（用于debug显示）
-      rnMessages.sent.push(message);
-      if (rnMessages.sent.length > 50) rnMessages.sent.shift();
-      
-      // 实际发送（如果在RN WebView中）
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(JSON.stringify(message));
-      }
-      console.log('[→ RN]', message);
-      
-      // 更新显示
-      updateRNPanel();
     };
 
     // DOM elements
@@ -412,95 +382,25 @@
     let audioClassifier;
     let audioContext;
     
-    // Mewt instance
-    const mewt = new Mewt();
-    
-    // Initialize VLM Vision Channel
-    const vlmVision = new VLMChannel('vision', {
-      enabled: true,
-      minInterval: 15000,
-      maxPerMinute: 3
+    // ========== 初始化统一引擎 ==========
+    const engine = new MewtEngine({
+      onPredictionUpdate: (data) => {
+        // 引擎通知：预测结果更新
+        updateDebugPanels(data);
+      },
+      onStateChange: (newState, oldState) => {
+        // 引擎通知：状态变化
+        addLog(`State Change: ${oldState} → ${newState}`);
+      },
+      onVLMResult: (result) => {
+        // 引擎通知：VLM 结果
+        addLog(`✓ VLM: ${result.text}`);
+      },
+      onLog: (message) => {
+        // 引擎通知：日志
+        addLog(message);
+      }
     });
-    
-    // ==================== DeepMewt状态管理 ====================
-    // 添加DeepMewt状态管理：维护全局状态，接收RN控制消息
-    // 改动原因：支持RN动态切换DeepMewt模式，为后续audio+video增强做准备
-    
-    // 全局DeepMewt状态
-    window.DEEP_MEWT_ENABLED = false;
-    
-    // ==================== 使用统一的 RN 消息接收器 ====================
-    // 注册消息处理器 - DRY原则，避免重复代码
-    rnReceiver
-      .on('deep_mewt_toggle', (data) => {
-        // 记录收到的消息
-        const receivedMsg = {
-          ...data,
-          direction: 'received',
-          receivedAt: Date.now()
-        };
-        rnMessages.received.push(receivedMsg);
-        if (rnMessages.received.length > 50) rnMessages.received.shift();
-        
-        addLog(`📥 收到RN消息: ${data.type}`);
-        updateRNPanel();
-        
-        // 更新全局状态
-        const previousState = window.DEEP_MEWT_ENABLED;
-        window.DEEP_MEWT_ENABLED = data.enabled;
-        
-        console.log(`🧠 DeepMewt状态变更: ${previousState ? 'ON' : 'OFF'} → ${data.enabled ? 'ON' : 'OFF'}`);
-        addLog(`🧠 DeepMewt: ${data.enabled ? 'ON' : 'OFF'}`);
-        
-        // 发送状态确认消息到RN
-        sendToRN(
-          `DeepMewt模式${data.enabled ? '已开启' : '已关闭'}`,
-          'system',
-          'idle',
-          { 
-            deepMewtEnabled: data.enabled,
-            previousState: previousState,
-            timestamp: Date.now()
-          }
-        );
-      })
-      .on('take_photo', (data) => {
-        // 记录收到的消息
-        const receivedMsg = {
-          ...data,
-          direction: 'received',
-          receivedAt: Date.now()
-        };
-        rnMessages.received.push(receivedMsg);
-        if (rnMessages.received.length > 50) rnMessages.received.shift();
-        
-        console.log('[Photo] 收到拍照请求');
-        addLog(`📸 收到拍照请求 (timestamp: ${data.timestamp})`);
-        updateRNPanel();
-        
-        // 获取当前帧截图
-        const imageData = getCurrentFrame();
-        const imageSizeKB = (imageData.length / 1024).toFixed(2);
-        
-        addLog(`📸 截图完成，大小: ${imageSizeKB} KB`);
-        
-        // 发送截图回RN
-        sendToRN(
-          '照片已拍摄',
-          'photo',
-          stableState,
-          {
-            imageData: imageData,
-            timestamp: Date.now(),
-            videoSize: {
-              width: video.videoWidth,
-              height: video.videoHeight
-            }
-          }
-        );
-        
-        addLog(`📸 截图已发送到RN (${video.videoWidth}x${video.videoHeight})`);
-      });
     
     // Window timer tracking
     let windowStartTime = Date.now();
@@ -509,32 +409,6 @@
     // Log management
     const maxLogEntries = 100;
     const logEntries = [];
-    
-    // Latest predictions (for display only)
-    let latestPredictions = {
-      image: [],
-      audio: []
-    };
-    
-    // State stability mechanism
-    let stableState = 'idle';
-    let pendingState = 'idle';
-    let stateChangeTime = 0;
-    let lastStableState = 'idle';
-    const STATE_DEBOUNCE_MS = 2000; // 2 seconds
-    
-    // Response deduplication
-    let lastResponse = '';
-    
-    // Helper: Get current video frame as base64
-    const getCurrentFrame = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      return canvas.toDataURL('image/jpeg', 0.8);
-    };
 
     // Start camera immediately
     const startCamera = async () => {
@@ -667,17 +541,8 @@
 
       try {
         const result = imageClassifier.classifyForVideo(video, performance.now());
-        if (result.classifications.length > 0) {
-          // Save for display
-          latestPredictions.image = result.classifications[0].categories;
-          
-          // Send to mewt
-          const predictions = result.classifications[0].categories.map(cat => ({
-            class: cat.categoryName,
-            score: cat.score
-          }));
-          mewt.addImageResult(predictions);
-        }
+        // 使用统一引擎处理图像结果
+        engine.handleImageResult(result.classifications);
       } catch (error) {
         console.error("Image classification error:", error);
       }
@@ -698,18 +563,9 @@
             if (!audioClassifier) return;
             const inputData = event.inputBuffer.getChannelData(0);
             const result = audioClassifier.classify(inputData);
-            const categories = result[0].classifications[0].categories;
             
-            // Save for display
-            latestPredictions.audio = categories;
-            
-            // Send to mewt
-            const predictions = categories.map(cat => ({
-              class: cat.categoryName,
-              score: cat.score
-            }));
-            
-            mewt.addAudioResult(predictions, inputData);
+            // 使用统一引擎处理音频结果
+            engine.handleAudioResult(result, inputData);
           } catch (error) {
             console.error("Audio classification error:", error);
           }
@@ -724,8 +580,10 @@
 
     // Debug update loop
     const startDebugUpdates = () => {
+      // 设置视频元素引用
+      engine.setVideoElement(video);
+      
       setInterval(() => {
-        updateDebugPanels();
         updateVLMStatus();
         updateWindowProgress();
       }, 100);
@@ -734,22 +592,22 @@
     // Update VLM status panel
     const updateVLMStatus = () => {
       const now = Date.now();
+      const vlmStatus = engine.getVLMStatus();
       
       // Processing status
       document.getElementById("vlm-processing").textContent = 
-        vlmVision.isProcessing ? "YES 🔄" : "NO";
+        vlmStatus.isProcessing ? "YES 🔄" : "NO";
       document.getElementById("vlm-processing").style.color = 
-        vlmVision.isProcessing ? "#ffff00" : "#00ff00";
+        vlmStatus.isProcessing ? "#ffff00" : "#00ff00";
       
       // Call count
-      const callCount = vlmVision.rateLimiter.callsInLastMinute.length;
-      document.getElementById("vlm-calls").textContent = `${callCount}/3`;
+      document.getElementById("vlm-calls").textContent = `${vlmStatus.callsInLastMinute}/3`;
       document.getElementById("vlm-calls").style.color = 
-        callCount >= 3 ? "#ff4444" : "#00ff00";
+        vlmStatus.callsInLastMinute >= 3 ? "#ff4444" : "#00ff00";
       
       // Last call time
-      if (vlmVision.rateLimiter.lastCallTime > 0) {
-        const secondsAgo = Math.floor((now - vlmVision.rateLimiter.lastCallTime) / 1000);
+      if (vlmStatus.lastCallTime > 0) {
+        const secondsAgo = Math.floor((now - vlmStatus.lastCallTime) / 1000);
         document.getElementById("vlm-last-call").textContent = 
           secondsAgo === 0 ? "Just now" : `${secondsAgo}s ago`;
       } else {
@@ -757,9 +615,8 @@
       }
       
       // Lock status
-      const lockRemaining = Math.max(0, vlmVision.lock.until - now);
-      if (lockRemaining > 0) {
-        const secondsLeft = Math.ceil(lockRemaining / 1000);
+      if (vlmStatus.lockRemaining > 0) {
+        const secondsLeft = Math.ceil(vlmStatus.lockRemaining / 1000);
         document.getElementById("vlm-lock").textContent = `🔒 ${secondsLeft}s`;
         document.getElementById("vlm-lock").style.color = "#ffff00";
       } else {
@@ -768,14 +625,13 @@
       }
       
       // Last result
-      const vlmText = vlmVision.getText();
-      if (vlmText) {
-        document.getElementById("vlm-result").textContent = vlmText;
+      if (vlmStatus.currentText) {
+        document.getElementById("vlm-result").textContent = vlmStatus.currentText;
         document.getElementById("vlm-result").style.borderLeftColor = "#ffff00";
-      } else if (vlmVision.lock.text) {
+      } else if (vlmStatus.lockText) {
         // Expired lock, show grayed out
         document.getElementById("vlm-result").textContent = 
-          `[已过期] ${vlmVision.lock.text}`;
+          `[已过期] ${vlmStatus.lockText}`;
         document.getElementById("vlm-result").style.borderLeftColor = "#444";
       } else {
         document.getElementById("vlm-result").textContent = "-";
@@ -783,89 +639,28 @@
       }
     };
 
-    // Update debug panels
-    const updateDebugPanels = () => {
-      const context = mewt.getFullContext();
+    // Update debug panels (called by engine via callback)
+    const updateDebugPanels = (data) => {
+      const context = engine.getFullContext();
+      const state = data.state;
       
-      // Enhance visual detection with LRU trust
-      let hasVisual = mewt.hasVisualCat();
-      if (!hasVisual) {
-        const recent10 = context.image_lru.recent(10);
-        const catCount = recent10.filter(item => item.isCat).length;
-        if (catCount > 0) {
-          hasVisual = true; // Trust LRU history
-        }
-      }
-      
-      const hasAudio = mewt.hasCatSound();
-      const rawState = mewt.determineState(hasVisual, hasAudio);
-      
-      // Apply state debouncing
-      const now = Date.now();
-      if (rawState !== pendingState) {
-        pendingState = rawState;
-        stateChangeTime = now;
-      }
-      
-      // Only update stable state if pending state persists for 2 seconds
-      if (now - stateChangeTime >= STATE_DEBOUNCE_MS) {
-        stableState = pendingState;
-        
-        // Detect state change
-        if (stableState !== lastStableState) {
-          handleStateChange(stableState, lastStableState);
-          lastStableState = stableState;
-        }
-      }
-      
-      const state = stableState;
-      
+      // Update state badge
       const stateBadge = document.getElementById("state-badge");
       stateBadge.textContent = state.toUpperCase();
       stateBadge.className = `state-badge state-${state}`;
       
+      // Update focusing status
       document.getElementById("focusing-status").textContent = 
-        context.is_now_focusing_cat ? "YES ✓" : "NO";
+        data.isFocusing ? "YES ✓" : "NO";
       
-      // Get text from VLM (if locked) or use default
-      const vlmText = vlmVision.getText();
-      
-      const stateResponses = {
-        'idle': '观察中...',
-        'cat_visual': '那里有只小猫',
-        'cat_audio': '诶？我好像听到小猫叫了',
-        'cat_both': '哦！是个小猫'
-      };
-      
-      // Apply response deduplication (VLM text has priority)
-      const newResponse = vlmText || stateResponses[state];
-      if (newResponse !== lastResponse) {
-        document.getElementById("state-response").textContent = newResponse;
-        lastResponse = newResponse;
-        
-        // Send to RN with complete format
-        const source = vlmText ? 'vlm' : 'state';
-        const metadata = {
-          hasCat: state !== 'idle',
-          hasVisual: hasVisual,
-          hasAudio: hasAudio
-        };
-        
-        // Add VLM-specific metadata
-        if (vlmText) {
-          const vlmData = vlmVision.getLockData();
-          metadata.confidence = vlmData?.confidence || 0.9;
-          metadata.vlmLocked = true;
-        }
-        
-        sendToRN(newResponse, source, state, metadata);
-      }
+      // Update state response
+      document.getElementById("state-response").textContent = data.text;
       
       // Update image detections
       const imageDiv = document.getElementById("image-detections");
-      if (latestPredictions.image.length > 0) {
+      if (data.image && data.image.length > 0) {
         const threshold = 0.3;
-        imageDiv.innerHTML = latestPredictions.image
+        imageDiv.innerHTML = data.image
           .slice(0, 5)
           .map(item => {
             const pass = item.categoryName.toLowerCase().includes('cat') && item.score > threshold;
@@ -882,9 +677,9 @@
       
       // Update audio detections
       const audioDiv = document.getElementById("audio-detections");
-      if (latestPredictions.audio.length > 0) {
+      if (data.audio && data.audio.length > 0) {
         const threshold = 0.2;
-        audioDiv.innerHTML = latestPredictions.audio
+        audioDiv.innerHTML = data.audio
           .slice(0, 5)
           .map(item => {
             const pass = (item.categoryName.toLowerCase().includes('cat') || 
@@ -902,9 +697,9 @@
       
       // Update window counts
       document.getElementById("image-count").textContent = 
-        latestPredictions.image.length;
+        data.image ? data.image.length : 0;
       document.getElementById("audio-count").textContent = 
-        latestPredictions.audio.length;
+        data.audio ? data.audio.length : 0;
       
       // Update LRU cache
       const lruSize = context.image_lru.size();
@@ -943,21 +738,15 @@
         
         // Log only if enough time has passed
         if (Date.now() - lastWindowLog > 900) {
-          const context = mewt.getFullContext();
-          const hasVisual = mewt.hasVisualCat();
-          const hasAudio = mewt.hasCatSound();
-          const state = mewt.determineState(hasVisual, hasAudio);
+          const context = engine.getFullContext();
+          const state = engine.getCurrentState();
           
-          addLog(`Window triggered → State: ${state}`);
+          addLog(`Window triggered → State: ${state.stable}`);
           
-          if (state !== 'idle') {
-            addLog(`Detection: Visual=${hasVisual ? '✓' : '✗'} Audio=${hasAudio ? '✓' : '✗'}`);
-          }
-          
-          const recent10 = context.image_lru.recent(10);
-          const catCount = recent10.filter(item => item.isCat).length;
-          if (state === 'idle' && catCount > 0) {
-            addLog(`LRU Trust: ${catCount}/10 cats → Maintain focus`);
+          if (state.stable !== 'idle') {
+            const recent10 = context.image_lru.recent(10);
+            const catCount = recent10.filter(item => item.isCat).length;
+            addLog(`Detection: LRU=${catCount}/10 cats`);
           }
           
           addLog(`Decision: Focusing=${context.is_now_focusing_cat ? 'YES' : 'NO'}`);
@@ -967,55 +756,7 @@
       }
     };
 
-    // Update RN message panels - 上行/下行分开显示
-    const updateRNPanel = () => {
-      // 上行消息 (RN → WebView)
-      document.getElementById("upstream-count").textContent = rnMessages.received.length;
-      const upstreamDiv = document.getElementById("upstream-messages");
-      
-      if (rnMessages.received.length > 0) {
-        upstreamDiv.innerHTML = rnMessages.received.slice(-5).reverse()
-          .map(msg => {
-            const time = new Date(msg.receivedAt).toLocaleTimeString();
-            return `<div class="lru-item" style="border-left-color: #4444ff;">
-              <div style="color: #888;">[${time}] ${msg.type}</div>
-              ${msg.enabled !== undefined ? 
-                `<div style="color: #4444ff; margin-top: 2px;">enabled: ${msg.enabled}</div>` : ''}
-              ${msg.timestamp ? 
-                `<div style="color: #666; margin-top: 2px; font-size: 8px;">ts: ${msg.timestamp}</div>` : ''}
-            </div>`;
-          }).join('');
-      } else {
-        upstreamDiv.innerHTML = '<div style="color: #666;">等待RN消息...</div>';
-      }
-      
-      // 下行消息 (WebView → RN)
-      document.getElementById("downstream-count").textContent = rnMessages.sent.length;
-      const downstreamDiv = document.getElementById("downstream-messages");
-      
-      if (rnMessages.sent.length > 0) {
-        downstreamDiv.innerHTML = rnMessages.sent.slice(-5).reverse()
-          .map(msg => {
-            const time = new Date(msg.timestamp).toLocaleTimeString();
-            
-            // source 颜色
-            const sourceColor = msg.source === 'vlm' ? '#ffff00' : 
-                              msg.source === 'emotion' ? '#ff00ff' : 
-                              msg.source === 'photo' ? '#ff8800' : 
-                              msg.source === 'system' ? '#4444ff' : '#00ff00';
-            
-            return `<div class="lru-item" style="border-left-color: ${sourceColor};">
-              <div style="color: #888;">[${time}] ${msg.source}</div>
-              ${msg.text ? `<div style="color: ${sourceColor}; margin-top: 2px;">${msg.text}</div>` : ''}
-              ${msg.metadata?.imageData ? 
-                `<div style="color: #666; margin-top: 2px; font-size: 8px;">📷 ${(msg.metadata.imageData.length/1024).toFixed(1)}KB</div>` : ''}
-            </div>`;
-          }).join('');
-      } else {
-        downstreamDiv.innerHTML = '<div style="color: #666;">无输出</div>';
-      }
-    };
-
+    // Add log entry
     // Add log entry
     const addLog = (message) => {
       const time = new Date().toLocaleTimeString();
@@ -1030,36 +771,6 @@
         .map(entry => `<div class="log-entry">
           <span class="log-time">[${entry.time}]</span> ${entry.message}
         </div>`).join('');
-    };
-
-    // Handle state changes - trigger VLM when appropriate
-    const handleStateChange = async (newState, oldState) => {
-      console.log(`[State Change] ${oldState} → ${newState}`);
-      addLog(`State Change: ${oldState} → ${newState}`);
-      
-      // Trigger VLM on transitions involving cat_visual or cat_both
-      const hasVisual = newState === 'cat_visual' || newState === 'cat_both';
-      const hadVisual = oldState === 'cat_visual' || oldState === 'cat_both';
-      
-      if (hasVisual && !hadVisual) {
-        // Started seeing cat - call VLM
-        console.log('[VLM Trigger] 检测到猫，调用VLM确认');
-        addLog('🔍 VLM: 检测到猫，正在确认...');
-        const frame = getCurrentFrame();
-        const result = await vlmVision.analyze({ image: frame });
-        if (result) {
-          addLog(`✓ VLM: ${result.text}`);
-        }
-      } else if (!hasVisual && hadVisual) {
-        // Lost cat - call VLM to confirm
-        console.log('[VLM Trigger] 丢失猫，调用VLM确认');
-        addLog('🔍 VLM: 丢失猫，正在确认...');
-        const frame = getCurrentFrame();
-        const result = await vlmVision.analyze({ image: frame });
-        if (result) {
-          addLog(`✓ VLM: ${result.text}`);
-        }
-      }
     };
     
     // Initialize
