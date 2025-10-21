@@ -371,6 +371,79 @@
       sent: [],      // 发送到RN的消息
       received: []   // 从RN收到的消息
     };
+    
+    // 更新消息显示
+    const updateMessageDisplay = () => {
+      // 上行消息（RN → WebView）
+      const upstreamDiv = document.getElementById("upstream-messages");
+      const upstreamCount = document.getElementById("upstream-count");
+      upstreamCount.textContent = rnMessages.received.length;
+      
+      if (rnMessages.received.length > 0) {
+        upstreamDiv.innerHTML = rnMessages.received.slice(-10).reverse()
+          .map(msg => {
+            const time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
+            return `<div style="margin: 2px 0; padding: 2px; background: #1a1a1a; border-left: 2px solid #0088ff;">
+              <div style="color: #888;">[${time}] ${msg.type}</div>
+              <div style="color: #00ff00;">${JSON.stringify(msg).substring(0, 100)}...</div>
+            </div>`;
+          }).join('');
+      } else {
+        upstreamDiv.innerHTML = '无消息';
+      }
+      
+      // 下行消息（WebView → RN）
+      const downstreamDiv = document.getElementById("downstream-messages");
+      const downstreamCount = document.getElementById("downstream-count");
+      downstreamCount.textContent = rnMessages.sent.length;
+      
+      if (rnMessages.sent.length > 0) {
+        downstreamDiv.innerHTML = rnMessages.sent.slice(-10).reverse()
+          .map(msg => {
+            const time = new Date(msg.timestamp).toLocaleTimeString();
+            const sourceColor = msg.source === 'state' ? '#00ff00' : 
+                              msg.source === 'vlm' ? '#ffff00' : '#ff00ff';
+            return `<div style="margin: 2px 0; padding: 2px; background: #1a1a1a; border-left: 2px solid ${sourceColor};">
+              <div style="color: #888;">[${time}] type: ${msg.type}, source: ${msg.source}</div>
+              <div style="color: ${sourceColor};">${msg.text}</div>
+            </div>`;
+          }).join('');
+      } else {
+        downstreamDiv.innerHTML = '无消息';
+      }
+    };
+    
+    // 拦截发送到 RN 的消息
+    const originalPostMessage = window.ReactNativeWebView?.postMessage;
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage = function(data) {
+        try {
+          const message = JSON.parse(data);
+          rnMessages.sent.push(message);
+          updateMessageDisplay();
+        } catch (e) {
+          console.error('Failed to parse outgoing message:', e);
+        }
+        if (originalPostMessage) {
+          originalPostMessage.call(window.ReactNativeWebView, data);
+        }
+      };
+    }
+    
+    // 监听来自 RN 的消息
+    const handleRNMessage = (event) => {
+      try {
+        const message = typeof event.data === 'string' ? 
+          JSON.parse(event.data) : event.data;
+        rnMessages.received.push(message);
+        updateMessageDisplay();
+      } catch (e) {
+        console.error('Failed to parse incoming message:', e);
+      }
+    };
+    
+    window.addEventListener('message', handleRNMessage);
+    document.addEventListener('message', handleRNMessage);
 
     // DOM elements
     const video = document.getElementById("webcam");
