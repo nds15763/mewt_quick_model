@@ -1,16 +1,17 @@
 /**
  * 业务域：状态变化观察者系统
  * 业务域简述：使用观察者模式统一管理猫咪检测状态变化后的所有后续操作，
- *           包括 RN 消息发送、VLM 触发、日志记录、UI 通知等，提供可扩展的状态响应机制。
+ *           包括 RN 消息发送、VLM 触发、日志记录、UI 通知、音频情绪分析等，提供可扩展的状态响应机制。
  * 
  * 核心方法清单：
  * - 通知所有观察者 notify @state-change-observer.js#L36-L44
  * - 添加观察者 addObserver @state-change-observer.js#L53-L62
  * - 移除观察者 removeObserver @state-change-observer.js#L71-L82
- * - 发送RN消息 RNMessengerObserver.notify @state-change-observer.js#L117-L147
- * - 触发VLM分析 VLMTriggerObserver.notify @state-change-observer.js#L189-L226
- * - 记录状态日志 LoggerObserver.notify @state-change-observer.js#L259-L266
- * - 通知UI更新 UINotifierObserver.notify @state-change-observer.js#L299-L306
+ * - 发送RN状态消息 RNMessengerObserver.notify @state-change-observer.js#L117-L147
+ * - 发送RN情绪消息 AudioEmotionObserver.notify @state-change-observer.js#L166-L192
+ * - 触发VLM分析 VLMTriggerObserver.notify @state-change-observer.js#L225-L262
+ * - 记录状态日志 LoggerObserver.notify @state-change-observer.js#L295-L302
+ * - 通知UI更新 UINotifierObserver.notify @state-change-observer.js#L335-L342
  */
 
 import sendToRN from './rn-bridge.js';
@@ -92,9 +93,9 @@ export class StateChangeObserver {
 // ========== 具体观察者实现 ==========
 
 /*
-方法名：RN消息发送观察者
-方法简介：监听状态变化并自动发送格式化消息到 React Native 应用的观察者。
-业务域关键词：RN消息、消息发送、状态通知、跨平台通信、React Native
+方法名：RN状态消息观察者
+方法简介：监听状态变化并发送视觉检测消息到 React Native 应用。
+业务域关键词：RN消息、视觉检测、状态通知、跨平台通信、React Native
 */
 export class RNMessengerObserver extends StateChangeObserver {
   constructor() {
@@ -102,20 +103,23 @@ export class RNMessengerObserver extends StateChangeObserver {
     // 状态对应的默认文案
     this.stateResponses = {
       'idle': '观察中...',
-      'cat_visual': '那里有只小猫',
-      'cat_audio': '诶？我好像听到小猫叫了',
-      'cat_both': '哦！是个小猫'
+      'cat_visual': '发现有个猫',
+      'cat_audio': null, // 音频由 AudioEmotionObserver 处理
+      'cat_both': '发现有个猫'
     };
   }
 
   /*
-  方法名：发送RN消息
-  方法简介：根据状态变化事件生成并发送消息到 RN，包含状态文本和完整元数据。
-  业务域关键词：RN消息发送、状态文本、消息格式化、跨平台消息
+  方法名：发送RN状态消息
+  方法简介：根据状态变化事件生成并发送视觉状态消息到 RN，音频状态交由 AudioEmotionObserver 处理。
+  业务域关键词：RN消息发送、视觉状态、消息格式化、跨平台消息
   Param: event - 状态变化事件对象
   */
   notify(event) {
     const { newState, oldState, text, vlmText, metadata = {} } = event;
+    
+    // cat_audio 状态不发送（由 AudioEmotionObserver 处理）
+    if (newState === 'cat_audio') return;
     
     // 使用 VLM 文本或默认文本
     const finalText = vlmText || text || this.stateResponses[newState];
@@ -134,6 +138,48 @@ export class RNMessengerObserver extends StateChangeObserver {
     
     // 发送到 RN
     sendToRN(finalText, 'state', newState, fullMetadata);
+  }
+}
+
+/*
+方法名：音频情绪分析观察者
+方法简介：监听音频检测状态变化，分析猫叫情绪并发送详细情绪消息到 React Native 应用。
+业务域关键词：音频情绪、猫叫分析、情绪识别、RN消息、音频检测
+*/
+export class AudioEmotionObserver extends StateChangeObserver {
+  /*
+  方法名：发送音频情绪消息
+  方法简介：检测到猫叫时，提取情绪分析结果并发送格式化消息到 RN，包含情绪图标和名称。
+  业务域关键词：情绪消息发送、猫叫情绪、音频分析、RN消息格式化
+  Param: event - 状态变化事件对象
+  */
+  notify(event) {
+    const { newState, emotionResult, metadata = {} } = event;
+    
+    // 只在有音频检测时处理
+    if (!metadata.hasAudio) return;
+    
+    // 如果有情绪分析结果，发送详细情绪
+    if (emotionResult && emotionResult.emotion) {
+      const { emotion, confidence } = emotionResult;
+      const emotionText = `猫叫:${emotion.icon} ${emotion.title}`;
+      
+      sendToRN(emotionText, 'audio_emotion', newState, {
+        ...metadata,
+        emotionId: emotion.id,
+        emotionIcon: emotion.icon,
+        emotionTitle: emotion.title,
+        emotionCategory: emotionResult.category.id,
+        confidence: Math.round(confidence * 100),
+        timestamp: event.timestamp || Date.now()
+      });
+    } else {
+      // 没有情绪分析结果时，发送基础猫叫检测消息
+      sendToRN('猫叫:检测到猫叫声', 'audio_detection', newState, {
+        ...metadata,
+        timestamp: event.timestamp || Date.now()
+      });
+    }
   }
 }
 

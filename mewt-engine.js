@@ -22,6 +22,7 @@ import rnReceiver from './rn-message-receiver.js';
 import { 
   StateChangeObserverManager,
   RNMessengerObserver,
+  AudioEmotionObserver,
   VLMTriggerObserver,
   LoggerObserver,
   UINotifierObserver
@@ -89,6 +90,9 @@ export class MewtEngine {
       audio: []
     };
     
+    // 最新情绪分析结果
+    this.latestEmotionResult = null;
+    
     // ========== 外部依赖（由页面注入）==========
     
     // 视频元素引用
@@ -122,25 +126,29 @@ export class MewtEngine {
   /*
   方法名：初始化观察者
   方法简介：创建并注册所有状态变化观察者，设置优先级和执行顺序。
-  业务域关键词：观察者初始化、观察者注册、优先级设置、RN消息观察者、VLM观察者
+  业务域关键词：观察者初始化、观察者注册、优先级设置、RN消息观察者、情绪分析观察者
   */
   _initializeObservers() {
     // 1. 日志记录（最高优先级，先记录）
     const loggerObserver = new LoggerObserver();
     this.stateChangeObserverManager.addObserver(loggerObserver, 100);
     
-    // 2. RN 消息发送（高优先级）
+    // 2. RN 状态消息发送（高优先级）
     const rnMessenger = new RNMessengerObserver();
     this.stateChangeObserverManager.addObserver(rnMessenger, 90);
     
-    // 3. VLM 触发（中等优先级）
+    // 3. 音频情绪分析（高优先级，在状态消息之后）
+    const audioEmotion = new AudioEmotionObserver();
+    this.stateChangeObserverManager.addObserver(audioEmotion, 85);
+    
+    // 4. VLM 触发（中等优先级）
     const vlmTrigger = new VLMTriggerObserver(
       this.vlmVision,
       () => this.getCurrentFrame()
     );
     this.stateChangeObserverManager.addObserver(vlmTrigger, 50);
     
-    // 4. UI 通知（较低优先级，最后通知）
+    // 5. UI 通知（较低优先级，最后通知）
     const uiNotifier = new UINotifierObserver();
     this.stateChangeObserverManager.addObserver(uiNotifier, 10);
   }
@@ -178,9 +186,8 @@ export class MewtEngine {
 
   /*
   方法名：处理音频检测结果
-  方法简介：接收 MediaPipe 音频分类结果和原始音频数据，存储到最新预测，
-            喂给 Mewt 实例，添加到窗口处理器，触发状态更新。
-  业务域关键词：音频检测、音频分类、YAMNet、Mewt音频处理、窗口聚合
+  方法简介：接收 MediaPipe 音频分类结果和原始音频数据，触发情绪分析并存储结果。
+  业务域关键词：音频检测、音频分类、YAMNet、情绪分析、音频特征提取
   Param: result - MediaPipe 音频分类结果
   Param: inputData - 原始音频数据（可选）
   */
@@ -198,8 +205,13 @@ export class MewtEngine {
       score: cat.score
     }));
     
-    // 喂给 Mewt 实例
-    this.mewt.addAudioResult(predictions, inputData);
+    // 喂给 Mewt 实例，获取情绪分析结果
+    const emotionResponse = this.mewt.addAudioResult(predictions, inputData);
+    
+    // 如果有情绪分析结果，存储到引擎
+    if (emotionResponse) {
+      this.latestEmotionResult = emotionResponse;
+    }
     
     // 添加到窗口处理器
     this.windowProcessor.addAudioData(predictions);
@@ -292,8 +304,8 @@ export class MewtEngine {
 
   /*
   方法名：通知状态变化
-  方法简介：构建状态变化事件对象，通过观察者管理器通知所有已注册观察者。
-  业务域关键词：状态变化通知、观察者事件、事件分发、状态事件构建
+  方法简介：构建状态变化事件对象，包含情绪数据，通过观察者管理器通知所有已注册观察者。
+  业务域关键词：状态变化通知、观察者事件、事件分发、情绪数据传递
   Param: newState - 新状态
   Param: oldState - 旧状态
   Param: hasVisual - 是否有视觉检测
@@ -309,6 +321,7 @@ export class MewtEngine {
       oldState,
       timestamp: Date.now(),
       vlmText,
+      emotionResult: this.latestEmotionResult, // 传递情绪分析结果
       metadata: {
         hasVisual,
         hasAudio,
@@ -322,6 +335,9 @@ export class MewtEngine {
     
     // 通知所有观察者
     this.stateChangeObserverManager.notify(event);
+    
+    // 清空情绪结果（避免重复发送）
+    this.latestEmotionResult = null;
   }
 
   // ========== 工具方法 ==========
