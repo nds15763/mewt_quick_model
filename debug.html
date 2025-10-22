@@ -487,7 +487,13 @@
     const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } }
+          video: {
+            facingMode: { ideal: "environment" },
+            aspectRatio: { ideal: 9/16 },  // 9:16 portrait orientation
+            width: { ideal: 1080, min: 720 },
+            height: { ideal: 1920, min: 1280 },
+            frameRate: { ideal: 30 }
+          }
         });
         video.srcObject = stream;
         
@@ -508,7 +514,14 @@
       } catch (err) {
         console.error("Error accessing rear camera:", err);
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              aspectRatio: { ideal: 9/16 },
+              width: { ideal: 1080, min: 720 },
+              height: { ideal: 1920, min: 1280 },
+              frameRate: { ideal: 30 }
+            }
+          });
           video.srcObject = stream;
           
           return new Promise((resolve) => {
