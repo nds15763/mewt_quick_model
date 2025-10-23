@@ -19,6 +19,7 @@ import { StateManager } from './state-manager.js';
 import { WindowProcessor } from './window-processor.js';
 import sendToRN from './rn-bridge.js';
 import rnReceiver from './rn-message-receiver.js';
+import { STATE_MESSAGES, SYSTEM_MESSAGES } from './messages-config.js';
 import { 
   StateChangeObserverManager,
   RNMessengerObserver,
@@ -265,16 +266,8 @@ export class MewtEngine {
     // 获取 VLM 文本（如果有锁定的结果）
     const vlmText = this.vlmVision.getText();
     
-    // 默认状态响应
-    const stateResponses = {
-      'idle': '观察中...',
-      'cat_visual': '那里有只小猫',
-      'cat_audio': '诶？我好像听到小猫叫了',
-      'cat_both': '哦！是个小猫'
-    };
-    
-    // 最终文本（VLM 优先）
-    const finalText = vlmText || stateResponses[this.state.stable];
+    // 最终文本（VLM 优先，否则使用统一配置的文案）
+    const finalText = vlmText || STATE_MESSAGES[this.state.stable];
     
     // 响应去重
     if (finalText && finalText !== this.lastResponse) {
@@ -498,9 +491,10 @@ export class MewtEngine {
       this.callbacks.onLog(`[DeepMewt] 状态切换: ${previousState} → ${this.deepMewtEnabled}`);
     }
     
-    // 发送确认消息到 RN
+    // 发送确认消息到 RN（使用统一配置）
+    const message = this.deepMewtEnabled ? SYSTEM_MESSAGES.deepMewtEnabled : SYSTEM_MESSAGES.deepMewtDisabled;
     sendToRN(
-      `DeepMewt模式已${this.deepMewtEnabled ? '启用' : '禁用'}`,
+      message,
       'system',
       this.state.stable,
       {
@@ -536,9 +530,9 @@ export class MewtEngine {
       this.callbacks.onLog(`[Photo] 截图完成，大小: ${imageSizeKB} KB`);
     }
     
-    // 发送截图回 RN
+    // 发送截图回 RN（使用统一配置）
     sendToRN(
-      '照片已拍摄',
+      SYSTEM_MESSAGES.photoTaken,
       'photo',
       this.state.stable,
       {

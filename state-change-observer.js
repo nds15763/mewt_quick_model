@@ -15,6 +15,7 @@
  */
 
 import sendToRN from './rn-bridge.js';
+import { STATE_MESSAGES, AUDIO_MESSAGES } from './messages-config.js';
 
 /*
 方法名：状态变化观察者管理器
@@ -100,13 +101,8 @@ export class StateChangeObserver {
 export class RNMessengerObserver extends StateChangeObserver {
   constructor() {
     super();
-    // 状态对应的默认文案
-    this.stateResponses = {
-      'idle': '观察中...',
-      'cat_visual': '发现有个猫',
-      'cat_audio': null, // 音频由 AudioEmotionObserver 处理
-      'cat_both': '发现有个猫'
-    };
+    // 使用统一配置的文案（DRY 原则）
+    this.stateResponses = STATE_MESSAGES;
   }
 
   /*
@@ -174,8 +170,8 @@ export class AudioEmotionObserver extends StateChangeObserver {
         timestamp: event.timestamp || Date.now()
       });
     } else {
-      // 没有情绪分析结果时，发送基础猫叫检测消息
-      sendToRN('猫叫:检测到猫叫声', 'audio_detection', newState, {
+      // 没有情绪分析结果时，发送基础猫叫检测消息（使用统一配置）
+      sendToRN(AUDIO_MESSAGES.detected, 'audio_detection', newState, {
         ...metadata,
         timestamp: event.timestamp || Date.now()
       });
