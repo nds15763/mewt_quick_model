@@ -741,27 +741,61 @@ export class MewtEngine {
     
     // 当页面变为可见时，检查视频流状态
     if (isVisible && this.videoElement) {
-      // 检查视频是否正在播放
-      const isPlaying = this.videoElement.currentTime > 0 
-        && !this.videoElement.paused 
-        && !this.videoElement.ended 
-        && this.videoElement.readyState > 2;
+      // 检查视频流是否活跃
+      const stream = this.videoElement.srcObject;
+      const hasActiveTrack = stream && stream.getVideoTracks().some(track => track.readyState === 'live');
       
-      if (!isPlaying) {
-        // 视频流可能已暂停，尝试恢复播放
+      if (!hasActiveTrack) {
+        // 视频流已断开，需要重新请求
         if (this.callbacks.onLog) {
-          this.callbacks.onLog('[Visibility] 检测到视频流已暂停，尝试恢复...');
+          this.callbacks.onLog('[Visibility] 检测到视频流已断开，重新启动摄像头...');
         }
         
-        this.videoElement.play().catch(err => {
-          console.error('[Visibility] 视频流恢复失败:', err);
-          if (this.callbacks.onLog) {
-            this.callbacks.onLog(`[Visibility] 视频流恢复失败: ${err.message}`);
-          }
-        });
+        // 调用全局的 restartCamera 函数（在 play.html 中定义）
+        if (window.restartCamera) {
+          window.restartCamera().then(success => {
+            if (success) {
+              if (this.callbacks.onLog) {
+                this.callbacks.onLog('[Visibility] ✅ 摄像头重启成功');
+              }
+            } else {
+              console.error('[Visibility] ❌ 摄像头重启失败');
+              if (this.callbacks.onLog) {
+                this.callbacks.onLog('[Visibility] ❌ 摄像头重启失败');
+              }
+            }
+          }).catch(err => {
+            console.error('[Visibility] 摄像头重启出错:', err);
+            if (this.callbacks.onLog) {
+              this.callbacks.onLog(`[Visibility] 摄像头重启出错: ${err.message}`);
+            }
+          });
+        } else {
+          console.warn('[Visibility] window.restartCamera 函数不可用');
+        }
       } else {
-        if (this.callbacks.onLog) {
-          this.callbacks.onLog('[Visibility] 视频流正常运行');
+        // 视频流活跃，检查是否正在播放
+        const isPlaying = this.videoElement.currentTime > 0 
+          && !this.videoElement.paused 
+          && !this.videoElement.ended 
+          && this.videoElement.readyState > 2;
+        
+        if (!isPlaying) {
+          // 尝试恢复播放
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog('[Visibility] 视频流活跃但未播放，尝试恢复...');
+          }
+          
+          this.videoElement.play().catch(err => {
+            console.error('[Visibility] 视频流恢复失败:', err);
+            if (this.callbacks.onLog) {
+              this.callbacks.onLog(`[Visibility] 视频流恢复失败: ${err.message}`);
+            }
+          });
+        } else {
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog('[Visibility] 视频流正常运行');
+          }
         }
       }
     }

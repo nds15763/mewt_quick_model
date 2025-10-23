@@ -367,6 +367,31 @@
       startClassification();
     };
 
+    // 暴露重新启动摄像头函数供外部调用（例如从后台恢复时）
+    window.restartCamera = async () => {
+      console.log('[Play] Restarting camera...');
+      
+      // 停止当前流
+      if (video.srcObject) {
+        const tracks = video.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        video.srcObject = null;
+      }
+      
+      // 重新启动摄像头
+      const success = await startCamera();
+      
+      if (success) {
+        console.log('[Play] ✅ Camera restarted successfully');
+        // 重新设置视频元素引用
+        engine.setVideoElement(video);
+      } else {
+        console.error('[Play] ❌ Failed to restart camera');
+      }
+      
+      return success;
+    };
+
     // Update the display (called by engine via callback)
     // 注意：RN 消息发送已移至观察者系统（RNMessengerObserver），此处仅更新 UI
     const updateDisplay = (data) => {
