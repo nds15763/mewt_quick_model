@@ -28,6 +28,7 @@ import {
   LoggerObserver,
   UINotifierObserver
 } from './state-change-observer.js';
+import { ServiceWorkerManager } from './sw-manager.js';
 
 /**
  * Mewt 检测引擎类
@@ -67,6 +68,11 @@ export class MewtEngine {
       minInterval: config.vlmMinInterval || 15000,
       maxPerMinute: config.vlmMaxPerMinute || 3
     });
+    
+    // ========== Service Worker 管理器 ==========
+    
+    // Service Worker 管理器（用于 MediaPipe 资源缓存）
+    this.swManager = new ServiceWorkerManager(config.onLog || null);
     
     // ========== 状态管理 ==========
     
@@ -122,6 +128,56 @@ export class MewtEngine {
     // ========== 注册 RN 消息处理器 ==========
     
     this._registerRNMessageHandlers();
+    
+    // ========== 自动注册 Service Worker ==========
+    
+    // 自动注册 Service Worker（可通过配置禁用）
+    if (config.enableServiceWorker !== false) {
+      this._initServiceWorker();
+    }
+  }
+
+  /*
+  方法名：初始化Service Worker
+  方法简介：异步注册 Service Worker，查询缓存状态，不阻塞引擎初始化。
+  业务域关键词：Service Worker注册、资源缓存、异步初始化、缓存状态
+  */
+  async _initServiceWorker() {
+    try {
+      const success = await this.swManager.register();
+      
+      if (success) {
+        const status = this.swManager.getCacheStatus();
+        
+        if (this.callbacks.onLog) {
+          this.callbacks.onLog(
+            `[引擎] Service Worker 就绪，缓存: ${status.cached}/${status.total}`
+          );
+        }
+        
+        // 如果所有资源已缓存，记录成功消息
+        if (status.isReady) {
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog('[引擎] ✅ 所有 MediaPipe 资源已缓存，下次加载将更快');
+          }
+        } else {
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog(
+              `[引擎] ⏳ 资源缓存中... ${status.cached}/${status.total}`
+            );
+          }
+        }
+      } else {
+        if (this.callbacks.onLog) {
+          this.callbacks.onLog('[引擎] Service Worker 未启用或注册失败');
+        }
+      }
+    } catch (error) {
+      console.error('[引擎] Service Worker 初始化失败:', error);
+      if (this.callbacks.onLog) {
+        this.callbacks.onLog(`[引擎] Service Worker 初始化失败: ${error.message}`);
+      }
+    }
   }
 
   /*
@@ -409,6 +465,33 @@ export class MewtEngine {
       lockText: this.vlmVision.lock.text,
       currentText: this.vlmVision.getText()
     };
+  }
+
+  /*
+  方法名：获取缓存状态
+  方法简介：返回 Service Worker 的缓存状态信息。
+  业务域关键词：缓存状态、资源缓存、MediaPipe缓存
+  */
+  getCacheStatus() {
+    return this.swManager.getCacheStatus();
+  }
+
+  /*
+  方法名：获取Service Worker详细状态
+  方法简介：返回 Service Worker 的详细状态，用于调试和监控。
+  业务域关键词：Service Worker状态、调试信息、缓存监控
+  */
+  getSWDetailedStatus() {
+    return this.swManager.getDetailedStatus();
+  }
+
+  /*
+  方法名：清除缓存
+  方法简介：清除所有 Service Worker 缓存，用于调试或强制更新。
+  业务域关键词：缓存清除、强制更新、调试工具
+  */
+  async clearCache() {
+    return await this.swManager.clearCache();
   }
 
   /*
