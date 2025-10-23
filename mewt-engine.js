@@ -140,6 +140,7 @@ export class MewtEngine {
   /*
   方法名：初始化Service Worker
   方法简介：异步注册 Service Worker，查询缓存状态，发送加载状态消息到RN。
+            添加延迟确保RN消息监听器已就绪。
   业务域关键词：Service Worker注册、资源缓存、异步初始化、缓存状态、加载消息
   */
   async _initServiceWorker() {
@@ -154,6 +155,9 @@ export class MewtEngine {
             `[引擎] Service Worker 就绪，缓存: ${status.cached}/${status.total}`
           );
         }
+        
+        // 等待1秒确保RN消息监听器已就绪
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         // 如果所有资源已缓存，直接发送就绪消息
         if (status.isReady) {
