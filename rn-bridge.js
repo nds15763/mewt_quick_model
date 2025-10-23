@@ -27,6 +27,11 @@
  * @returns {string} - 'chat_message' | 'status_update'
  */
 function determineMessageType(source, state, metadata) {
+  // 系统消息 - 聊天消息（包括资源加载、DeepMewt等系统提示）
+  if (source === 'system') {
+    return 'chat_message';
+  }
+  
   // 状态机 - 聊天消息
   if (source === 'state' && state !== 'idle') {
     return 'chat_message';
