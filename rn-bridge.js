@@ -27,9 +27,10 @@
  * @returns {string} - 'chat_message' | 'status_update'
  */
 function determineMessageType(source, state, metadata) {
-  // 系统消息 - 聊天消息（包括资源加载、DeepMewt等系统提示）
+  // 系统消息 - 根据showInChat决定是否显示
+  // 默认显示(chat_message)，除非metadata.showInChat明确设置为false
   if (source === 'system') {
-    return 'chat_message';
+    return metadata?.showInChat !== false ? 'chat_message' : 'status_update';
   }
   
   // 状态机 - 聊天消息

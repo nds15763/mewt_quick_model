@@ -672,6 +672,7 @@ export class MewtEngine {
     }
     
     // 发送确认消息到 RN（使用统一配置）
+    // showInChat: false 表示不在聊天界面显示此消息
     const message = this.deepMewtEnabled ? SYSTEM_MESSAGES.deepMewtEnabled : SYSTEM_MESSAGES.deepMewtDisabled;
     sendToRN(
       message,
@@ -680,7 +681,8 @@ export class MewtEngine {
       {
         enabled: this.deepMewtEnabled,
         timestamp: Date.now(),
-        previousState: previousState
+        previousState: previousState,
+        showInChat: false  // 不在聊天界面显示
       }
     );
   }
