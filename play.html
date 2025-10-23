@@ -127,6 +127,39 @@
   </div>
 
   <script type="module">
+    // ========== 立即执行的消息监听器（同步，不依赖模块加载）==========
+    // 在所有 import 之前设置，确保立即捕获消息，不受模块加载延迟影响
+    console.log('[Play] Setting up immediate message listener');
+    
+    // 暂存待处理的消息
+    window._pendingRNMessages = [];
+    
+    const immediateMessageHandler = (event) => {
+      try {
+        const data = typeof event.data === 'string' ? 
+          JSON.parse(event.data) : event.data;
+        
+        console.log('[← RN Immediate]', data);
+        
+        // 暂存消息供后续处理
+        window._pendingRNMessages.push(data);
+        
+      } catch (e) {
+        console.error('[Play] Immediate message handler error:', e);
+      }
+    };
+    
+    // 同时监听 window 和 document（兼容 iOS/Android）
+    window.addEventListener('message', immediateMessageHandler);
+    document.addEventListener('message', immediateMessageHandler);
+    
+    console.log('[Play] Immediate message listener ready');
+    
+    // ========== 模块导入（会异步加载）==========
+    // 显式导入 RN 消息接收器，确保尽早初始化监听器
+    // 这样可以在 MewtEngine 初始化前就设置好消息监听，避免错过早期消息
+    import './rn-message-receiver.js';
+    
     // Import MediaPipe libraries
     import {
       ImageClassifier,
@@ -166,6 +199,20 @@
       }
     });
     
+    // ========== 尽早设置视频元素引用 ==========
+    // 在初始化完成前就设置，这样即使模型还在加载，拍照功能也能工作
+    engine.setVideoElement(video);
+    console.log('[Play] Video element set early');
+    
+    // ========== 处理暂存的待处理消息 ==========
+    // 引擎已初始化，处理之前暂存的所有消息
+    if (window._pendingRNMessages && window._pendingRNMessages.length > 0) {
+      console.log(`[Play] Processing ${window._pendingRNMessages.length} pending messages`);
+      window._pendingRNMessages.forEach(msg => {
+        engine.handleRNMessage(msg);
+      });
+      window._pendingRNMessages = []; // 清空队列
+    }
 
     // Create ImageClassifier with proper error handling
     const createImageClassifier = async () => {
