@@ -139,8 +139,8 @@ export class MewtEngine {
 
   /*
   方法名：初始化Service Worker
-  方法简介：异步注册 Service Worker，查询缓存状态，不阻塞引擎初始化。
-  业务域关键词：Service Worker注册、资源缓存、异步初始化、缓存状态
+  方法简介：异步注册 Service Worker，查询缓存状态，发送加载状态消息到RN。
+  业务域关键词：Service Worker注册、资源缓存、异步初始化、缓存状态、加载消息
   */
   async _initServiceWorker() {
     try {
@@ -155,29 +155,110 @@ export class MewtEngine {
           );
         }
         
-        // 如果所有资源已缓存，记录成功消息
+        // 如果所有资源已缓存，直接发送就绪消息
         if (status.isReady) {
           if (this.callbacks.onLog) {
-            this.callbacks.onLog('[引擎] ✅ 所有 MediaPipe 资源已缓存，下次加载将更快');
+            this.callbacks.onLog('[引擎] ✅ 所有 MediaPipe 资源已缓存');
           }
+          
+          // 发送就绪消息到RN
+          sendToRN(
+            "Alright, let's find some cats!",
+            'system',
+            'idle',
+            { isReady: true, cached: true }
+          );
         } else {
+          // 资源未缓存，发送加载消息
           if (this.callbacks.onLog) {
             this.callbacks.onLog(
               `[引擎] ⏳ 资源缓存中... ${status.cached}/${status.total}`
             );
           }
+          
+          // 发送加载中消息到RN
+          sendToRN(
+            "Loading resources, this may take about a minute...",
+            'system',
+            'idle',
+            { isLoading: true, cached: false }
+          );
+          
+          // 等待资源加载完成（检查缓存状态变化）
+          await this._waitForResourcesReady();
+          
+          // 发送就绪消息到RN
+          sendToRN(
+            "Alright, let's find some cats!",
+            'system',
+            'idle',
+            { isReady: true, cached: false }
+          );
         }
       } else {
         if (this.callbacks.onLog) {
           this.callbacks.onLog('[引擎] Service Worker 未启用或注册失败');
         }
+        
+        // Service Worker 失败，仍然发送就绪消息（降级处理）
+        sendToRN(
+          "Alright, let's find some cats!",
+          'system',
+          'idle',
+          { isReady: true, swFailed: true }
+        );
       }
     } catch (error) {
       console.error('[引擎] Service Worker 初始化失败:', error);
       if (this.callbacks.onLog) {
         this.callbacks.onLog(`[引擎] Service Worker 初始化失败: ${error.message}`);
       }
+      
+      // 出错时仍然发送就绪消息（降级处理）
+      sendToRN(
+        "Alright, let's find some cats!",
+        'system',
+        'idle',
+        { isReady: true, error: true }
+      );
     }
+  }
+
+  /*
+  方法名：等待资源就绪
+  方法简介：轮询检查缓存状态，直到所有资源加载完成或超时。
+  业务域关键词：资源加载、轮询检查、超时处理
+  */
+  async _waitForResourcesReady() {
+    const maxWaitTime = 120000; // 最长等待2分钟
+    const checkInterval = 500; // 每500ms检查一次
+    const startTime = Date.now();
+    
+    return new Promise((resolve) => {
+      const checkStatus = () => {
+        const status = this.swManager.getCacheStatus();
+        const elapsed = Date.now() - startTime;
+        
+        if (status.isReady) {
+          // 资源加载完成
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog(`[引擎] ✅ 资源加载完成，耗时: ${Math.round(elapsed / 1000)}s`);
+          }
+          resolve();
+        } else if (elapsed >= maxWaitTime) {
+          // 超时，放弃等待
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog('[引擎] ⚠️ 资源加载超时，继续运行');
+          }
+          resolve();
+        } else {
+          // 继续等待
+          setTimeout(checkStatus, checkInterval);
+        }
+      };
+      
+      checkStatus();
+    });
   }
 
   /*
