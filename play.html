@@ -368,6 +368,7 @@
     };
 
     // Update the display (called by engine via callback)
+    // 注意：RN 消息发送已移至观察者系统（RNMessengerObserver），此处仅更新 UI
     const updateDisplay = (data) => {
       // Update raw predictions display
       if (data.image && data.image.length > 0) {
@@ -389,21 +390,8 @@
       // Update Mewt response display
       mewtResponseElement.textContent = data.text;
       
-      // Send to RN with complete format
-      const source = data.vlmLocked ? 'vlm' : 'state';
-      const metadata = {
-        hasCat: data.state !== 'idle',
-        hasVisual: data.hasVisual,
-        hasAudio: data.hasAudio
-      };
-      
-      // Add VLM-specific metadata
-      if (data.vlmLocked) {
-        metadata.confidence = 0.9;
-        metadata.vlmLocked = true;
-      }
-      
-      sendToRN(data.text, source, data.state, metadata);
+      // ✅ RN 消息发送已统一由观察者系统处理（state-change-observer.js）
+      // ❌ 移除重复的 sendToRN 调用，避免双重发送
     };
 
     // Frame rate control for image prediction
