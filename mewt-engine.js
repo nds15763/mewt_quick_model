@@ -429,9 +429,9 @@ export class MewtEngine {
 
   /*
   方法名：注册RN消息处理器
-  方法简介：设置 RN 消息接收器的事件监听，处理 DeepMewt 切换和拍照请求，
+  方法简介：设置 RN 消息接收器的事件监听，处理 DeepMewt 切换、拍照请求和可见性变化，
             内部私有方法。
-  业务域关键词：RN消息、事件监听、DeepMewt、拍照请求、消息处理
+  业务域关键词：RN消息、事件监听、DeepMewt、拍照请求、可见性变化、消息处理
   */
   _registerRNMessageHandlers() {
     // DeepMewt 模式切换
@@ -446,6 +446,14 @@ export class MewtEngine {
     rnReceiver.on('take_photo', (data) => {
       this.handleRNMessage({
         type: 'take_photo',
+        ...data
+      });
+    });
+    
+    // 页面可见性变化（锁屏/解锁）
+    rnReceiver.on('visibility_change', (data) => {
+      this.handleRNMessage({
+        type: 'visibility_change',
         ...data
       });
     });
@@ -470,6 +478,10 @@ export class MewtEngine {
         
       case 'take_photo':
         this._handleTakePhoto(message);
+        break;
+        
+      case 'visibility_change':
+        this._handleVisibilityChange(message);
         break;
         
       default:
@@ -544,6 +556,47 @@ export class MewtEngine {
         } : null
       }
     );
+  }
+
+  /*
+  方法名：处理可见性变化
+  方法简介：处理页面可见性变化（锁屏/解锁），当页面重新可见时确保视频流正常运行。
+  业务域关键词：可见性变化、锁屏恢复、视频流检查、页面生命周期
+  Param: data - 包含 visible 字段的数据对象（true=可见，false=不可见）
+  */
+  _handleVisibilityChange(data) {
+    const isVisible = data.visible;
+    
+    if (this.callbacks.onLog) {
+      this.callbacks.onLog(`[Visibility] 页面可见性变化: ${isVisible ? '可见' : '不可见'}`);
+    }
+    
+    // 当页面变为可见时，检查视频流状态
+    if (isVisible && this.videoElement) {
+      // 检查视频是否正在播放
+      const isPlaying = this.videoElement.currentTime > 0 
+        && !this.videoElement.paused 
+        && !this.videoElement.ended 
+        && this.videoElement.readyState > 2;
+      
+      if (!isPlaying) {
+        // 视频流可能已暂停，尝试恢复播放
+        if (this.callbacks.onLog) {
+          this.callbacks.onLog('[Visibility] 检测到视频流已暂停，尝试恢复...');
+        }
+        
+        this.videoElement.play().catch(err => {
+          console.error('[Visibility] 视频流恢复失败:', err);
+          if (this.callbacks.onLog) {
+            this.callbacks.onLog(`[Visibility] 视频流恢复失败: ${err.message}`);
+          }
+        });
+      } else {
+        if (this.callbacks.onLog) {
+          this.callbacks.onLog('[Visibility] 视频流正常运行');
+        }
+      }
+    }
   }
 
   // ========== 生命周期方法 ==========
