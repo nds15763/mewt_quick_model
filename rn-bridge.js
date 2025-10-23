@@ -27,6 +27,12 @@
  * @returns {string} - 'chat_message' | 'status_update'
  */
 function determineMessageType(source, state, metadata) {
+  // VLM锁定的消息 - 最高优先级，无论source是什么都显示
+  // 这确保VLM分析结果始终显示在聊天界面
+  if (metadata?.vlmLocked === true) {
+    return 'chat_message';
+  }
+  
   // 系统消息 - 根据showInChat决定是否显示
   // 默认显示(chat_message)，除非metadata.showInChat明确设置为false
   if (source === 'system') {
@@ -38,8 +44,8 @@ function determineMessageType(source, state, metadata) {
     return 'chat_message';
   }
   
-  // VLM - 聊天消息（已锁定）
-  if (source === 'vlm' && metadata?.vlmLocked === true) {
+  // VLM - 聊天消息
+  if (source === 'vlm') {
     return 'chat_message';
   }
   
