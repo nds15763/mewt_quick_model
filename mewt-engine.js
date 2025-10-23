@@ -156,8 +156,8 @@ export class MewtEngine {
           );
         }
         
-        // 等待1秒确保RN消息监听器已就绪
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // 等待3秒确保RN消息监听器已就绪
+        await new Promise(resolve => setTimeout(resolve, 5000));
         
         // 如果所有资源已缓存，直接发送就绪消息
         if (status.isReady) {
